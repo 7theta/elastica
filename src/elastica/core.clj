@@ -135,7 +135,6 @@
   (let [^Client cluster (:es-client cluster)
         ^IndexRequest request (apply-kw index-request index type doc args)
         response-parser (fn [^IndexResponse response]
-                          (println response)
                           (assoc (extract-header response)
                                  :_created? (.isCreated response)))]
     (run cluster .index request response-parser callback)))
