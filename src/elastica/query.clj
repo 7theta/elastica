@@ -241,7 +241,7 @@
   ([id-list]
    (ids nil id-list))
   ([types id-list]
-   (doto (IdsQueryBuilder. (cond->> types types (into-array String (map ->es-value types))))
+   (doto (IdsQueryBuilder. (into-array String (map ->es-value types)))
      (.addIds ^java.util.Collection id-list))))
 
 (defn nested

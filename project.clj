@@ -10,7 +10,7 @@
 
 (def elasticsearch-version "2.1.0")
 
-(defproject com.7theta/elastica "0.5.8"
+(defproject com.7theta/elastica "0.5.9"
   :description "An idiomatic clojure interface to native Elasticsearch"
   :url "https://github.com/7theta/elastica"
   :license {:name "Eclipse Public License"
@@ -26,7 +26,7 @@
                    :dependencies [[reloaded.repl "0.2.1"]
                                   [org.clojure/tools.namespace "0.2.11"]
                                   [org.clojure/test.check "0.9.0"]
-                                  [com.gfredericks/test.chuck "0.2.4"]]
+                                  [com.gfredericks/test.chuck "0.2.5"]]
                    :source-paths ["dev"]}}
   :scm {:name "git"
         :url "https://github.com/7theta/elastica"})
