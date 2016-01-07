@@ -14,7 +14,7 @@ checkouts/
 .lein-plugins/
 .lein-failures
 .nrepl-port
-
+.nrepl-history
 
 ### Emacs ###
 # -*- mode: gitignore; -*-
