@@ -12,6 +12,7 @@
   "Functions for manipulating the indices in an Elasticsearch cluster."
   (:require [elastica.impl.coercion :refer [->es-value ->clj-value]]
             [elastica.impl.request :refer [run extract-header]]
+            [utilis.fn :refer [apply-kw]]
             [clojure.set :refer [rename-keys]])
   (:import  [org.elasticsearch.client Client]
             [org.elasticsearch.action.admin.indices.exists.indices IndicesExistsRequest IndicesExistsResponse]
@@ -106,19 +107,16 @@
       the result will cause the exception to be thrown within the callback.
       If a callback is supplied, the function will execute asynchronously."
   [cluster ^String index & {:keys [mappings settings callback]
-                            :or {settings {:shards 8 :replicas 1}}}]
+                            :or {settings {:shards 8 :replicas 1}}
+                            :as args}]
   {:pre [(:started cluster)]}
   (if callback
     (index-exists? cluster index
-                   (fn [result]
-                     (when-not @result
-                       (create-index! cluster index
-                                      :mappings mappings
-                                      :settings settings
-                                      :callback callback))))
+                   :callback (fn [result]
+                               (when-not @result
+                                 (apply-kw create-index! cluster index args))))
     (when-not (index-exists? cluster index)
-      (create-index! cluster index mappings settings))))
-
+      (apply-kw create-index! cluster index args))))
 
 (defn index-mappings
   "Returns a collection of mappings assigned to 'indices' in the
