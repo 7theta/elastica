@@ -10,7 +10,7 @@
 
 (def elasticsearch-version "2.1.0")
 
-(defproject com.7theta/elastica "0.5.9"
+(defproject com.7theta/elastica "0.5.10"
   :description "An idiomatic clojure interface to native Elasticsearch"
   :url "https://github.com/7theta/elastica"
   :license {:name "Eclipse Public License"
