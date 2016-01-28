@@ -1,5 +1,6 @@
 # com.7theta/elastica
 [![Current Version](https://img.shields.io/clojars/v/com.7theta/elastica.svg)](https://clojars.org/com.7theta/elastica)
+[![Dependencies Status](https://jarkeeper.com/7theta/elastica/status.svg)](https://jarkeeper.com/7theta/elastica)
 
 A high performance elasticsearch library that supports an asynchronous
 interface in addition to the synchronous interface.
