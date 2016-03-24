@@ -8,7 +8,7 @@
 ;;   the terms of this license.
 ;;   You must not remove this notice, or any others, from this software.
 
-(ns elastica.sort
+(ns elastica.query.sort
   "Functions for generating various sort criteria that can be passed to
   elastica.core/search"
   (:require [elastica.impl.coercion :refer [->es-value]])
@@ -17,7 +17,7 @@
             [org.elasticsearch.common.unit DistanceUnit]
             [org.elasticsearch.script Script]))
 
-(defn field-sort
+(defn field
   "Used to sort the results by the supplied 'field' in the given
   'order' (:asc or :desc.)"
   [field order]
@@ -27,7 +27,7 @@
               :asc SortOrder/ASC
               :desc SortOrder/DESC))))
 
-(defn geo-distance-sort
+(defn geo-distance
   "Used to sort the results by the distance from the provided
   'lon' and 'lat' in the 'units' and 'order' (:asc or :desc.)
   specified. The distance is computed based on the location
@@ -54,7 +54,7 @@
               :asc SortOrder/ASC
               :desc SortOrder/DESC))))
 
-(defn script-sort
+(defn script
   "Used to sort the results by the return value of 'script' of 'type'
   in the 'order' (:asc or :desc.) specified."
   [script type order]

@@ -50,13 +50,13 @@
   "Generate code that will perform the request synchronously or asynchronously
   if a 'callback' is provided."
   ([cluster method request response-parser]
-   (run cluster method request response-parser nil))
+   `(run ~cluster ~method ~request ~response-parser nil))
   ([cluster method request response-parser callback]
    `(if ~callback
       (run-async ~cluster ~method ~request ~response-parser ~callback)
       (run-sync ~cluster ~method ~request ~response-parser)))
   ([builder response-parser]
-   (run builder response-parser nil))
+   `(run ~builder ~response-parser nil))
   ([builder response-parser callback]
    `(if ~callback
       (run-async ~builder ~response-parser ~callback)
@@ -82,7 +82,7 @@
                ^Map (->es-value doc))
     parent (.parent parent)
     version (.version version)
-    ttl (.ttl ttl)))
+    ttl (.ttl ^long ttl)))
 
 (defn ^UpdateRequest update-request
   [index type id update-doc-or-script & {:keys [detect-no-op retry-on-conflict
