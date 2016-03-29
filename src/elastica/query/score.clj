@@ -119,8 +119,8 @@
   https://www.elastic.co/guide/en/elasticsearch/reference/2.0/query-dsl-function-score-query.html"
   [query functions & {:keys [score-mode min-score
                              boost-mode max-boost]}]
-  {:pre [(#{:multiply :sum :avg :first :max :min} score-mode)
-         (#{:multiply :replace :sum :avg :max :min} boost-mode)]}
+  {:pre [(or (nil? score-mode) (#{:multiply :sum :avg :first :max :min} score-mode))
+         (or (nil? boost-mode) (#{:multiply :replace :sum :avg :max :min} boost-mode))]}
   (reduce (fn [^FunctionScoreQueryBuilder fs f]
             (if (vector? f)
               (.add fs (first f) (second f))

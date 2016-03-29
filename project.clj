@@ -16,7 +16,7 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [com.7theta/utilis "0.6.0"]
 
-                 [org.elasticsearch/elasticsearch "2.2.1"]
+                 [org.elasticsearch/elasticsearch "2.3.1"]
                  [com.vividsolutions/jts "1.13" :exclusions [xerces/xercesImpl]]
 
                  [com.stuartsierra/component "0.3.1"]]
