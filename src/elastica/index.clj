@@ -58,7 +58,8 @@
       the result will cause the exception to be thrown within the callback.
       If a callback is supplied, the function will execute asynchronously."
   [cluster ^String index & {:keys [mappings settings callback]
-                            :or {settings {:shards 8 :replicas 1}}}]
+                            :or {settings {:shards 8 :replicas 1}}
+                            :as args}]
   {:pre [(:started cluster)]}
   (let [^Client client (:es-client cluster)
         ^CreateIndexRequest request (CreateIndexRequest. index)
