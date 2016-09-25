@@ -85,22 +85,20 @@
     ttl (.ttl ^long ttl)))
 
 (defn ^UpdateRequest update-request
-  [index type id update-doc-or-script & {:keys [detect-no-op retry-on-conflict
-                                                parent version]}]
-  (let [[update-doc script] (if (instance? Script update-doc-or-script)
-                              [nil update-doc-or-script]
-                              [update-doc-or-script nil])]
-    (cond-> (UpdateRequest. ^String index ^String (->es-value type) ^String (str id))
-      (not (nil? detect-no-op)) (.detectNoop detect-no-op)
-      (not (nil? retry-on-conflict)) (.retryOnConflict retry-on-conflict)
-      parent (.parent parent)
-      update-doc (.doc ^Map (->es-value update-doc))
-      script (.script ^Script script)
-      version (.version version))))
+  [index type id & {:keys [update-doc script
+                           detect-no-op retry-on-conflict
+                           parent version]}]
+  (cond-> (UpdateRequest. ^String index ^String (->es-value type) ^String (str id))
+    (not (nil? detect-no-op)) (.detectNoop detect-no-op)
+    (not (nil? retry-on-conflict)) (.retryOnConflict retry-on-conflict)
+    parent (.parent parent)
+    update-doc (.doc ^Map (->es-value update-doc))
+    script (.script ^Script script)
+    version (.version version)))
 
 (defn ^UpdateRequest upsert-request
-  [index type id insert-doc update-doc-or-script & {:as args}]
-  (doto ^UpdateRequest (apply-kw update-request index type id update-doc-or-script args)
+  [index type id insert-doc & {:as args}]
+  (doto ^UpdateRequest (apply-kw update-request index type id args)
     (.upsert ^IndexRequest (apply-kw index-request index type id insert-doc args))))
 
 (defn ^DeleteRequest delete-request

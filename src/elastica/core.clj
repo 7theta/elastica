@@ -18,7 +18,8 @@
             [elastica.impl.request :refer [run extract-header
                                            index-request update-request
                                            upsert-request delete-request]]
-            [utilis.fn :refer [apply-kw]])
+            [utilis.fn :refer [apply-kw]]
+            [utilis.logic :refer [xor]])
   (:import  [org.elasticsearch.client Client]
             [org.elasticsearch.action.get GetRequest GetResponse]
             [org.elasticsearch.action.index IndexRequest IndexResponse]
@@ -142,12 +143,15 @@
 (defn update!
   "Merges the contents of 'update-doc' into the document identified by 'type'
   and 'id' in 'index'. The fields from 'update-doc' will entirely replace the
-  fields in the existing document.
+  fields in the existing document. Alternatively a 'script' can be specified
+  that will be run against the existing document to create the new version.
 
   If a document does not exist, an exception will be thrown.
 
   The following optional keyword parameters can be used to control
   the behavior:
+    :update-doc - The document to merge into the existing document
+    :script - The script to run against the existing document
     :detect-no-op - By default the document is only reindexed if the new
        version differs from the old. Setting detect-no-op to false will
        cause Elasticsearch to always update the document even if it hasn’t
@@ -167,19 +171,21 @@
       the actual result. If the operation resulted in an error, de-referencing
       the result will cause the exception to be thrown within the callback.
       If a callback is supplied, the function will execute asynchronously."
-  [cluster index type id update-doc-or-script
-   & {:keys [detect-no-op retry-on-conflict parent version callback] :as args}]
-  {:pre [(:started cluster)]}
+  [cluster index type id & {:keys [update-doc script
+                                   detect-no-op retry-on-conflict parent
+                                   version callback] :as args}]
+  {:pre [(:started cluster) (xor update-doc script)]}
   (let [^Client cluster (:es-client cluster)
         ^UpdateRequest request (apply-kw update-request index type id
-                                         update-doc-or-script args)
+                                         args)
         response-parser (fn [^UpdateResponse response] (extract-header response))]
     (run cluster .update request response-parser callback)))
 
 (defn upsert!
   "Merges the contents of 'update-doc' into the document identified by 'type'
   and 'id' in 'index'. The fields from 'update-doc' will entirely replace the
-  fields in the existing document.
+  fields in the existing document. Alternatively a 'script' can be specified
+  that will be run against the existing document to create the new version.
 
   If a document does not exist, 'insert-doc' will be inserted into the index.
 
@@ -188,6 +194,8 @@
 
   The following optional keyword parameters can be used used to control
   the behavior:
+    :update-doc - The document to merge into the existing document
+    :script - The script to run against the existing document
     :detect-no-op - By default the document is only reindexed if the new
        version differs from the old. Setting detect-no-op to false will
        cause Elasticsearch to always update the document even if it hasn’t
@@ -207,12 +215,14 @@
       the actual result. If the operation resulted in an error, de-referencing
       the result will cause the exception to be thrown within the callback.
       If a callback is supplied, the function will execute asynchronously."
-  [cluster index type id insert-doc update-doc-or-script
-   & {:keys [detect-no-op retry-on-conflict parent version callback] :as args}]
-  {:pre [(:started cluster)]}
+  [cluster index type id insert-doc
+   & {:keys [update-doc script
+             detect-no-op retry-on-conflict
+             parent version callback] :as args}]
+  {:pre [(:started cluster) insert-doc (xor update-doc script)]}
   (let [^Client cluster (:es-client cluster)
         ^UpdateRequest request (apply-kw upsert-request index type id insert-doc
-                                         update-doc-or-script args)
+                                         args)
         response-parser (fn [^UpdateResponse response]
                           (assoc (extract-header response)
                                  :_created? (.isCreated response)))]
@@ -261,7 +271,8 @@
       the actual result. If the operation resulted in an error, de-referencing
       the result will cause the exception to be thrown within the callback.
       If a callback is supplied, the function will execute asynchronously."
-  [cluster indices query  & {:keys [types sorts start size explain callback]}]
+  [cluster indices query  & {:keys [types sorts start size explain callback]
+                             :as args}]
   (let [^Client cluster (:es-client cluster)
         ^SearchRequestBuilder builder (cond-> (.prepareSearch cluster (into-array indices))
                                         sorts (#(reduce (fn [^SearchRequestBuilder search sort]
