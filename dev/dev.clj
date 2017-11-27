@@ -12,14 +12,17 @@
   "Tools for interactive development with the REPL. This file should
   not be included in a production build of the application."
   (:require [elastica.cluster :as ec]
-            [elastica.batch :as ecb]
             [elastica.index :as ei]
             [elastica.core :as e]
-            [elastica.query :as eq]
 
-            [reloaded.repl :refer [system init start stop go reset reset-all]]
-            [clojure.tools.namespace.repl :refer [refresh refresh-all]]
-            [com.stuartsierra.component :as component]
+            ;; [elastica.batch :as ecb]
+            ;; [elastica.query :as eq]g
+
+            [integrant.core :as ig]
+
+            [integrant.repl :refer [clear go halt init reset reset-all set-prep!]]
+            [integrant.repl.state :refer [system]]
+            [clojure.tools.namespace.repl :refer [refresh refresh-all disable-reload!]]
 
             [clojure.repl :refer [apropos dir doc find-doc pst source]]
             [clojure.reflect :refer [reflect]]
@@ -27,10 +30,12 @@
 
             [clojure.test :refer [run-tests run-all-tests]]))
 
-(defn dev-system
-  [_config]
-  (component/system-map
-   :cluster (ec/transport-client "elasticsearch")
-   :batch-processor (component/using (ecb/batch-processor "Bulk Import") [:cluster])))
+(disable-reload! (find-ns 'integrant.core))
 
-(reloaded.repl/set-init! #(dev-system nil))
+(def dev-config
+  {:elastica.cluster/client
+   {}})
+
+(ig/load-namespaces dev-config)
+
+(set-prep! (constantly dev-config))

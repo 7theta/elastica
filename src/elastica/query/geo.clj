@@ -9,61 +9,46 @@
 ;;   You must not remove this notice, or any others, from this software.
 
 (ns elastica.query.geo
-  "Functions for the generation of geo-spatial queries"
-  (:require [elastica.impl.coercion :refer [->es-value]])
-  (:import  [org.elasticsearch.index.query
-             GeoBoundingBoxQueryBuilder GeoDistanceQueryBuilder
-             GeoShapeQueryBuilder]
-            [org.elasticsearch.common.geo ShapeRelation]
-            [org.elasticsearch.common.geo.builders ShapeBuilder
-             PointBuilder PolygonBuilder EnvelopeBuilder]
-            [com.vividsolutions.jts.geom Coordinate]))
+  "Functions for the generation of geo-spatial queries")
 
 (defn bounding-box
   "A query for documents based on a point location using a bounding box.
 
-  https://www.elastic.co/guide/en/elasticsearch/reference/2.0/query-dsl-geo-bounding-box-query.html"
-  [field top-left bottom-right & {:keys [query-name]}]
-  (cond-> (doto (GeoBoundingBoxQueryBuilder. (->es-value field))
-            (.topLeft (:lat top-left) (:lon top-left))
-            (.bottomRight (:lat bottom-right) (:lon bottom-right)))
-    query-name (.queryName query-name)))
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-geo-bounding-box-query.html"
+  [field top-left bottom-right]
+  {:geo_bounding_box {field {:top_left top-left
+                             :bottom_right bottom-right}}})
 
 (defn distance
   "A query for documents that exist within a specific distance from a geo point
 
-  https://www.elastic.co/guide/en/elasticsearch/reference/2.0/query-dsl-geo-distance-query.html"
-  [field point distance & {:keys [query-name]}]
-  (cond-> (doto (GeoDistanceQueryBuilder. (->es-value field))
-            (.point (:lat point) (:lon point))
-            (.distance distance))
-    query-name (.queryName query-name)))
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-geo-distance-query.html"
+  [field point distance & {:keys [distance-type]}]
+  {:pre [(#{:arc :plane} distance-type)]}
+  {:geo_distance {:distance distance
+                  field point
+                  :distance_type distance-type}})
 
 (defn point
   "Generates a point shape that can be used in a elastica.query.geo/shape query"
   [lon lat]
-  (doto (PointBuilder.)
-    (.coordinate (Coordinate. lon lat))))
+  {:lon lon :lat lat})
 
 (defn envelope
   "Generates a envelope (rectangle) shape that can be used in a
   elastica.query.geo/shape query"
   [top-left bottom-right]
-  (doto (EnvelopeBuilder.)
-    (.topLeft (:lon top-left) (:lat top-left))
-    (.bottomRight (:lon bottom-right) (:lat bottom-right))))
+  [[(:lon top-left) (:lat top-left)]
+   [(:lon bottom-right) (:lat bottom-right)]])
 
 (defn shape
   "A query for documents that satisfy the given 'relation'(:disjoint :intersects
   :within) with the 'shape'
 
-  https://www.elastic.co/guide/en/elasticsearch/reference/2.0/query-dsl-geo-shape-query.html"
-  [field shape relation & {:keys [boost query-name]}]
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-geo-shape-query.html"
+  [field shape relation & {:keys [boost ignore-unmapped]}]
   {:pre [(#{:disjoint :intersects :within} relation)]}
-  (cond-> (GeoShapeQueryBuilder. (->es-value field) shape
-                                 (case relation
-                                   :disjoint ShapeRelation/DISJOINT
-                                   :intersects ShapeRelation/INTERSECTS
-                                   :within ShapeRelation/WITHIN))
-    query-name (.queryName query-name)
-    boost (.boost ^double boost)))
+  {:geo_shape {field {:shape shape
+                      :relation relation
+                      :boost boost
+                      :ignore_unmapped ignore-unmapped}}})

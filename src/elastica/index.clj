@@ -10,38 +10,27 @@
 
 (ns elastica.index
   "Functions for manipulating the indices in an Elasticsearch cluster."
-  (:require [elastica.impl.coercion :refer [->es-value ->clj-value]]
-            [elastica.impl.request :refer [run extract-header]]
+  (:require [elastica.impl.client :as ec]
+            [elastica.impl.coercion :refer [->es-value]]
             [utilis.fn :refer [apply-kw]]
-            [clojure.set :refer [rename-keys]])
-  (:import  [org.elasticsearch.client Client]
-            [org.elasticsearch.action.admin.indices.exists.indices IndicesExistsRequest IndicesExistsResponse]
-            [org.elasticsearch.action.admin.indices.create CreateIndexRequest CreateIndexResponse]
-            [org.elasticsearch.action.admin.indices.delete DeleteIndexRequest DeleteIndexResponse]
-            [org.elasticsearch.action.admin.indices.mapping.get GetMappingsRequest GetMappingsResponse]
-            [org.elasticsearch.action.admin.indices.mapping.put PutMappingRequest PutMappingResponse]
-            [java.util Map]))
+            [org.httpkit.client :as http]
+            [cheshire.core :as json]))
 
 ;;; Public
 
 (defn index-exists?
-  "Return a boolean indicating whether 'index' exists on 'cluster'.
-
-  The following optional keyword parameters can be used to control
-  the behavior:
-   :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster ^String index & {:keys [callback]}]
-  {:pre [(:started cluster)]}
-  (let [^Client client (:es-client cluster)
-        ^IndicesExistsRequest request (IndicesExistsRequest. (into-array [index]))]
-    (run (-> client .admin .indices) .exists request
-      (fn [^IndicesExistsResponse response] (.isExists response))
-      callback)))
+  "Return a boolean indicating whether 'index' exists on 'cluster'"
+  [cluster index]
+  (let [result (ec/promise)]
+    (http/head (ec/url cluster index)
+               (fn [{:keys [status headers body error]}]
+                 (deliver result
+                          (case (long status)
+                            200 true
+                            404 false
+                            (ex-info "index-exists?: error"
+                                     {:es-error (json/decode body true)})))))
+    result))
 
 (defn create-index!
   "Creates 'index' on 'cluster'.
@@ -50,48 +39,40 @@
   the behavior:
     :mappings - The mappings to be assigned to the index.
     :settings - The shard and replica settings for the index being created.
-      The default is 8 shards with 1 replica.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster ^String index & {:keys [mappings settings callback]
-                            :or {settings {:shards 8 :replicas 1}}
-                            :as args}]
-  {:pre [(:started cluster)]}
-  (let [^Client client (:es-client cluster)
-        ^CreateIndexRequest request (CreateIndexRequest. index)
-        _ (.settings request ^Map (->es-value (rename-keys settings
-                                                           {:shards "number_of_shards"
-                                                            :replicas "number_of_replicas"})))
-        _ (when mappings
-            (doseq [[k v] mappings]
-              (.mapping request ^String (name k) ^Map (->es-value v))))]
-    (run (-> client .admin .indices) .create request
-      (fn [^CreateIndexResponse response] (.isAcknowledged response))
-      callback)))
+      The default is 5 shards with 1 replica."
+  [cluster index & {:keys [mappings settings]
+                    :or {settings {:shards 5 :replicas 1}}
+                    :as args}]
+  (let [request (merge
+                 {:settings {:number_of_shards (:shards settings)
+                             :number_of_replicas (:replicas settings)}}
+                 (when mappings
+                   {:mappings mappings}))
+        result (ec/promise)]
+    (http/put (ec/url cluster index)
+              {:headers {"Content-Type" "application/json"}
+               :body (json/encode request)}
+              (fn [{:keys [status headers body error]}]
+                (deliver result
+                         (case (long status)
+                           200 true
+                           (ex-info "create-index: error"
+                                    {:es-error (json/decode body true)})))))
+    result))
 
 (defn delete-index!
   "Deletes the index references by 'index' on the cluster connected to by
-  'cluster'. A boolean is returned indicating whether the delete was successful.
-
-  The following optional keyword parameters can be used to control
-  the behavior:
-   :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster ^String index & {:keys [callback]}]
-  {:pre [(:started cluster)]}
-  (let [^Client client (:es-client cluster)
-        ^DeleteIndexRequest request (DeleteIndexRequest. index)]
-    (run (-> client .admin .indices) .delete request
-      (fn [^DeleteIndexResponse response] (.isAcknowledged response))
-      callback)))
+  'cluster'. A boolean is returned indicating whether the delete was successful"
+  [cluster index]
+  (let [result (ec/promise)]
+    (http/delete (ec/url cluster index)
+                 (fn [{:keys [status headers body error]}]
+                   (deliver result
+                            (case (long status)
+                              200 true
+                              (ex-info "delete-index: error"
+                                       {:es-error (json/decode body true)})))))
+    result))
 
 (defn ensure-index!
   "Creates 'index' on 'cluster' if it does not already exist.
@@ -100,66 +81,71 @@
   the behavior:
     :mappings - The mappings to be assigned to the index.
     :settings - The shard and replica settings for the index being created.
-      The default is 8 shards with 1 replica.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster ^String index & {:keys [mappings settings callback]
-                            :or {settings {:shards 8 :replicas 1}}
-                            :as args}]
-  {:pre [(:started cluster)]}
-  (if callback
-    (index-exists? cluster index
-                   :callback (fn [result]
-                               (when-not @result
-                                 (apply-kw create-index! cluster index args))))
-    (when-not (index-exists? cluster index)
-      (apply-kw create-index! cluster index args))))
+      The default is 8 shards with 1 replica."
+  [cluster index & {:keys [mappings settings]
+                    :or {settings {:shards 8 :replicas 1}}
+                    :as args}]
+  (let [result (ec/promise)]
+    (future
+      (try
+        (when-not @(index-exists? cluster index)
+          (deliver result @(apply-kw create-index! cluster index args)))
+        (catch Exception e (deliver result e))))
+    result))
+
+(defn index
+  [cluster index]
+  (let [result (ec/promise)]
+    (http/get (ec/url cluster index)
+              (fn [{:keys [status headers body error]}]
+                (deliver result
+                         (case (long status)
+                           200 (json/decode body true)
+                           (ex-info "index: error"
+                                    {:es-error (json/decode body true)})))))
+    result))
 
 (defn index-mappings
   "Returns a collection of mappings assigned to 'indices' in the
-  'cluster'.
-
-  The following optional keyword parameters can be used to control
-  the behavior:
-   :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster indices & {:keys [callback]}]
-  {:pre [(:started cluster)]}
-  (let [^Client client (:es-client cluster)
-        ^GetMappingsRequest request (doto (GetMappingsRequest.)
-                                      (.indices #^"[Ljava.lang.String;"
-                                                (into-array String (map name indices))))]
-    (run (-> client .admin .indices) .getMappings request
-      (fn [^GetMappingsResponse response]
-        (-> response .mappings (->clj-value :keys->keyword true)))
-      callback)))
+  'cluster'"
+  ([cluster indices]
+   (index-mappings cluster indices nil))
+  ([cluster indices mapping-type]
+   (let [result (ec/promise)]
+     (http/get (str (ec/url cluster indices) "/_mapping/" (when mapping-type (name mapping-type)))
+               (fn [{:keys [status headers body error]}]
+                 (deliver result
+                          (case (long status)
+                            200 (json/decode body true)
+                            (ex-info "index: error"
+                                     {:es-error (json/decode body true)})))))
+     result)))
 
 (defn put-mapping!
-  "Assigns the 'mapping-type' and 'mapping' to the 'indices' in the 'cluster'.
+  "Assigns the 'mapping-type' and 'mapping' to the 'indices' in the 'cluster'"
+  [cluster indices mapping-type mapping]
+  (let [result (ec/promise)]
+    (http/put (str (ec/url cluster indices) "/_mapping/" (name mapping-type))
+              {:headers {"Content-Type" "application/json"}
+               :body (json/encode {:properties mapping})}
+              (fn [{:keys [status headers body error]}]
+                (deliver result
+                         (case (long status)
+                           200 true
+                           (ex-info "put-mapping!: error"
+                                    {:es-error (json/decode body true)})))))
+    result))
 
-  The following optional keyword parameters can be used to control
-  the behavior:
-   :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster mapping-type mapping indices & {:keys [callback]}]
-  {:pre [(:started cluster)]}
-  (let [^Client client (:es-client cluster)
-        ^PutMappingRequest request (doto (PutMappingRequest. (into-array String (map name indices)))
-                                     (.type mapping-type)
-                                     (.source ^Map (->es-value mapping)))]
-
-    (run (-> client .admin .indices) .putMapping request
-      (fn [^PutMappingResponse response] (.isAcknowledged response))
-      callback)))
+(defn type-exists?
+  "Return a boolean indicating whether 'indices' contain 'type' on on 'cluster'"
+  [cluster indices type]
+  (let [result (ec/promise)]
+    (http/head (str (ec/url cluster indices) "/_mapping/" (name type))
+               (fn [{:keys [status headers body error]}]
+                 (deliver result
+                          (case (long status)
+                            200 true
+                            404 false
+                            (ex-info "type-exists?: error"
+                                     {:es-error (json/decode body true)})))))
+    result))

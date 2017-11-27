@@ -14,27 +14,13 @@
   If bulk interactions are required, the functions in the elastica.batch
   namespace should be used instead."
   (:refer-clojure :exclude [get type sort])
-  (:require [elastica.impl.coercion :refer [->es-value ->clj-value]]
-            [elastica.impl.request :refer [run extract-header
-                                           index-request update-request
-                                           upsert-request delete-request]]
-            [utilis.fn :refer [apply-kw]]
-            [utilis.logic :refer [xor]])
-  (:import  [org.elasticsearch.client Client]
-            [org.elasticsearch.action.get GetRequest GetResponse]
-            [org.elasticsearch.action.index IndexRequest IndexResponse]
-            [org.elasticsearch.action.update UpdateRequest UpdateResponse]
-            [org.elasticsearch.action.delete DeleteRequest DeleteResponse]
-            [org.elasticsearch.index.query QueryBuilder]
-            [org.elasticsearch.action.suggest SuggestRequestBuilder
-             SuggestRequest SuggestResponse]
-            [org.elasticsearch.search.suggest Suggest
-             Suggest$Suggestion Suggest$Suggestion$Entry
-             Suggest$Suggestion$Entry$Option]
-            [org.elasticsearch.search.suggest.completion CompletionSuggestion$Entry$Option]
-            [org.elasticsearch.action.search SearchRequestBuilder
-             SearchRequest SearchResponse]
-            [org.elasticsearch.search SearchHits SearchHit]))
+  (:require [elastica.impl.client :as ec]
+            [elastica.impl.coercion :refer [->es-value]]
+            [utilis.map :refer [compact]]
+            [utilis.logic :refer [xor]]
+            [org.httpkit.client :as http]
+            [cheshire.core :as json]
+            [clojure.string :as st]))
 
 ;;; Public
 
@@ -83,26 +69,17 @@
 (defn get
   "Returns the contents of the document of 'type' with 'id' from 'index'.
   The keys in the document will be converted to keywords. If the document is
-  not found, a nil will be returned.
-
-  The following optional keyword parameters can be used to control
-  the behavior:
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster index type id & {:keys [callback]}]
-  {:pre [(:started cluster)]}
-  (let [^Client cluster (:es-client cluster)
-        ^GetRequest request (GetRequest. index (->es-value type) id)
-        response-parser (fn [^GetResponse response]
-                          (when (and (.isExists response) (not (.isSourceEmpty response)))
-                            (assoc (extract-header response)
-                                   :_source (->clj-value (.getSourceAsMap response)
-                                                         :keys->keyword true))))]
-    (run cluster .get request response-parser callback)))
+  not found, a nil will be returned"
+  [cluster index type id]
+  (let [result (ec/promise)]
+    (http/get (st/join "/" [(ec/url cluster index) type id])
+              (fn [{:keys [status headers body error]}]
+                (deliver result
+                         (case (long status)
+                           200 (json/decode body true)
+                           (ex-info "get: error"
+                                    {:es-error (json/decode body true)})))))
+    result))
 
 (defn put!
   "Puts 'doc' of 'type' into 'index'.
@@ -123,22 +100,27 @@
       a document will live in the index before it is automatically deleted.
       The type's mapping must enable the '_ttl' field and the sweep of the index
       can be controlled via the 'indiced.ttl.interval' and 'indices.ttl.bulk_size'
-      index settings.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster index type doc
-   & {:keys [id parent version ttl callback] :as args}]
-  {:pre [(:started cluster)]}
-  (let [^Client cluster (:es-client cluster)
-        ^IndexRequest request (apply-kw index-request index type doc args)
-        response-parser (fn [^IndexResponse response]
-                          (assoc (extract-header response)
-                                 :_created? (.isCreated response)))]
-    (run cluster .index request response-parser callback)))
+      index settings"
+  [cluster index type doc & {:keys [id parent version ttl] :as args}]
+  (let [result (ec/promise)
+        callback (fn [{:keys [status headers body error]}]
+                   (deliver result
+                            (if (#{200 201} status)
+                              (json/decode body true)
+                              (ex-info "put!: error"
+                                       {:status status
+                                        :es-error (json/decode body true)}))))]
+    (if id
+      (http/put (str (ec/url cluster index) "/" type "/" id
+                     (when version (str "?version=" version)))
+                {:headers {"Content-Type" "application/json"}
+                 :body (json/encode (->es-value doc))}
+                callback)
+      (http/post (str (ec/url cluster index) "/" type "/")
+                 {:headers {"Content-Type" "application/json"}
+                  :body (json/encode (->es-value doc))}
+                 callback))
+    result))
 
 (defn update!
   "Merges the contents of 'update-doc' into the document identified by 'type'
@@ -164,22 +146,28 @@
     :parent - The id of the parent document if this is a child document
     :version - If the update! is replacing an existing document, the version
       provided must match the version of the document in the index for the
-      update to succeed. This is useful as a form of optimistic locking.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
+      update to succeed. This is useful as a form of optimistic locking"
   [cluster index type id & {:keys [update-doc script
                                    detect-no-op retry-on-conflict parent
-                                   version callback] :as args}]
-  {:pre [(:started cluster) (xor update-doc script)]}
-  (let [^Client cluster (:es-client cluster)
-        ^UpdateRequest request (apply-kw update-request index type id
-                                         args)
-        response-parser (fn [^UpdateResponse response] (extract-header response))]
-    (run cluster .update request response-parser callback)))
+                                   version] :as args}]
+  {:pre [(xor update-doc script)]}
+  (let [result (ec/promise)
+        url (str (ec/url cluster index) "/" type "/" id "/_update"
+                 (when version (str "?version=" version)))
+        callback (fn [{:keys [status headers body error]}]
+                   (deliver result
+                            (if (#{200 201} status)
+                              (json/decode body true)
+                              (ex-info "update!: error"
+                                       {:status status
+                                        :es-error (json/decode body true)}))))]
+    (http/post url
+               {:headers {"Content-Type" "application/json"}
+                :body (json/encode
+                       (compact {(if script :script :doc) (->es-value script)
+                                 :detect_noop detect-no-op}))}
+               callback)
+    result))
 
 (defn upsert!
   "Merges the contents of 'update-doc' into the document identified by 'type'
@@ -208,25 +196,32 @@
     :parent - The id of the parent document if this is a child document
     :version - If the upsert! is replacing an existing document, the version
       provided must match the version of the document in the index for the
-      upsert to succeed. This is useful as a form of optimistic locking.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster index type id insert-doc
-   & {:keys [update-doc script
+      upsert to succeed. This is useful as a form of optimistic locking"
+  [cluster index type id
+   & {:keys [insert-doc doc-as-upsert
+             update-doc script
              detect-no-op retry-on-conflict
              parent version callback] :as args}]
-  {:pre [(:started cluster) insert-doc (xor update-doc script)]}
-  (let [^Client cluster (:es-client cluster)
-        ^UpdateRequest request (apply-kw upsert-request index type id insert-doc
-                                         args)
-        response-parser (fn [^UpdateResponse response]
-                          (assoc (extract-header response)
-                                 :_created? (.isCreated response)))]
-    (run cluster .update request response-parser callback)))
+  {:pre [(or insert-doc doc-as-upsert) (xor update-doc script)]}
+  (let [result (ec/promise)
+        url (str (ec/url cluster index) "/" type "/" id "/_update"
+                 (when version (str "?version=" version)))
+        callback (fn [{:keys [status headers body error]}]
+                   (deliver result
+                            (if (#{200 201} status)
+                              (json/decode body true)
+                              (ex-info "upsert!: error"
+                                       {:status status
+                                        :es-error (json/decode body true)}))))]
+    (http/post url
+               {:headers {"Content-Type" "application/json"}
+                :body (json/encode
+                       (compact {(if script :script :doc) (->es-value script)
+                                 :detect_noop detect-no-op
+                                 :upsert insert-doc
+                                 :doc_as_upsert doc-as-upsert}))}
+               callback)
+    result))
 
 (defn delete!
   "Deletes a document of 'type' with 'id' from 'index'.
@@ -238,21 +233,18 @@
   the behavior:
     :version - The version provided must match the version of the document in
        the index for the delete to succeed. This is useful to ensure that the
-       document is not being deleted after another operation has updated it.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster index type id & {:keys [version callback] :as args}]
-  {:pre [(:started cluster)]}
-  (let [^Client cluster (:es-client cluster)
-        ^DeleteRequest request (apply-kw delete-request index type id args)
-        response-parser (fn [^DeleteResponse response]
-                          (assoc (extract-header response)
-                                 :_found? (.isFound response)))]
-    (run cluster .delete request response-parser callback)))
+       document is not being deleted after another operation has updated it"
+  [cluster index type id & {:keys [version] :as args}]
+  (let [result (ec/promise)]
+    (http/delete (str (st/join "/" [(ec/url cluster index) type id])
+                      (when version (str "?version=" version)))
+                 (fn [{:keys [status headers body error]}]
+                   (deliver result
+                            (case (long status)
+                              200 (json/decode body true)
+                              (ex-info "delete!: error"
+                                       {:es-error (json/decode body true)})))))
+    result))
 
 (defn search
   "Executes 'query' across the collection of 'indices' in the Elasticsearch
@@ -264,78 +256,23 @@
     :sorts - A collection of sort criteria to apply to the result set
     :start and :size - A start index and a page size for the results. It is
       recommended that the scan and scroll API be used if deep paging is
-      required.
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster indices query  & {:keys [types sorts start size explain callback]
+      required"
+  [cluster indices query  & {:keys [types sorts start size explain]
                              :as args}]
-  (let [^Client cluster (:es-client cluster)
-        ^SearchRequestBuilder builder (cond-> (.prepareSearch cluster (into-array indices))
-                                        sorts (#(reduce (fn [^SearchRequestBuilder search sort]
-                                                          (.addSort search sort))
-                                                        % sorts)))
-        ^SearchRequest request (cond-> (doto builder
-                                         (.setVersion true)
-                                         (.setQuery ^QueryBuilder query))
-                                 start (.setFrom start)
-                                 size (.setSize size)
-                                 types (.setTypes (into-array (map ->es-value types)))
-                                 explain (.setExplain explain)
-                                 true .request)
-        response-parser (fn [^SearchResponse response]
-                          (let [^SearchHits hits (.getHits response)
-                                docs (->> hits .iterator iterator-seq
-                                          (mapv (fn [^SearchHit h]
-                                                  (assoc (extract-header h)
-                                                         :_score (.getScore h)
-                                                         :_source (->clj-value (.getSource h)
-                                                                               :keys->keyword true)))))]
-                            {:took (.getTookInMillis response)
-                             :_shards {:total (.getTotalShards response)
-                                       :successful (.getSuccessfulShards response)
-                                       :failed (.getFailedShards response)}
-                             :timed_out (.isTimedOut response)
-                             :terminated_early (.isTerminatedEarly response)
-                             :hits {:total (.getTotalHits hits)
-                                    :max_score (.getMaxScore hits)
-                                    :hits docs}}))]
-    (run cluster .search request response-parser callback)))
 
-(defn suggest
-  "Returns the matches for 'suggestions' across 'indices' in the 'cluster'.
-
-  The following optional keyword parameters can be used to control
-  the behavior:
-    :callback - The function that will be called when the response is
-      received from Elasticsearch. The function must take one parameter
-      and will be passed the result, which it must de-reference to receive
-      the actual result. If the operation resulted in an error, de-referencing
-      the result will cause the exception to be thrown within the callback.
-      If a callback is supplied, the function will execute asynchronously."
-  [cluster indices suggestions & {:keys [callback]}]
-  (let [^Client cluster (:es-client cluster)
-        ^SuggestRequestBuilder builder (reduce (fn [^SuggestRequestBuilder builder s]
-                                                 (.addSuggestion builder s))
-                                               (.prepareSuggest cluster (into-array indices))
-                                               suggestions)
-        response-parser (fn [^SuggestResponse response]
-                          (let [^Suggest suggestions (.getSuggest response)]
-                            (->> suggestions
-                                 (map (fn [^Suggest$Suggestion sr]
-                                        (->> (.getEntries sr)
-                                             (map (fn [^Suggest$Suggestion$Entry c]
-                                                    [(.getName sr)
-                                                     {:text (str (.getText c))
-                                                      :offset (.getOffset c)
-                                                      :length (.getLength c)
-                                                      :options (map (fn [^CompletionSuggestion$Entry$Option o]
-                                                                      {:text (str (.getText o))
-                                                                       :score (.getScore o)
-                                                                       :payload (->clj-value (.getPayloadAsMap o))})
-                                                                    (.getOptions c))}]))
-                                             (into {})))))))]
-    (run builder response-parser callback)))
+  (let [result (ec/promise)
+        query (compact {:query query
+                        :from start
+                        :size size
+                        :sort sorts})]
+    (http/get (str (ec/url cluster indices) "/_search")
+              {:headers {"Content-Type" "application/json"}
+               :body (json/encode query)}
+              (fn [{:keys [status headers body error]}]
+                (deliver result
+                         (if (= 200 status)
+                           (json/decode body true)
+                           (ex-info "search: error"
+                                    {:status status
+                                     :es-error (json/decode body true)})))))
+    result))
