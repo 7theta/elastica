@@ -15,11 +15,11 @@
   namespace should be used instead."
   (:refer-clojure :exclude [get type sort])
   (:require [elastica.impl.client :as ec]
-            [elastica.impl.coercion :refer [->es-value]]
+            [elastica.impl.coercion :refer [->es-key]]
+            [elastica.cluster :as cluster]
+            [utilis.fn :refer [fsafe]]
             [utilis.map :refer [compact]]
             [utilis.logic :refer [xor]]
-            [org.httpkit.client :as http]
-            [cheshire.core :as json]
             [clojure.string :as st]))
 
 ;;; Public
@@ -71,15 +71,14 @@
   The keys in the document will be converted to keywords. If the document is
   not found, a nil will be returned"
   [cluster index type id]
-  (let [result (ec/promise)]
-    (http/get (st/join "/" [(ec/url cluster index) type id])
-              (fn [{:keys [status headers body error]}]
-                (deliver result
-                         (case (long status)
-                           200 (json/decode body true)
-                           (ex-info "get: error"
-                                    {:es-error (json/decode body true)})))))
-    result))
+  (cluster/run cluster
+    {:http
+     {:method :get
+      :id ::get
+      :url {:cluster cluster
+            :indices index
+            :type type
+            :segments [id]}}}))
 
 (defn put!
   "Puts 'doc' of 'type' into 'index'.
@@ -101,26 +100,26 @@
       The type's mapping must enable the '_ttl' field and the sweep of the index
       can be controlled via the 'indiced.ttl.interval' and 'indices.ttl.bulk_size'
       index settings"
-  [cluster index type doc & {:keys [id parent version ttl] :as args}]
-  (let [result (ec/promise)
-        callback (fn [{:keys [status headers body error]}]
-                   (deliver result
-                            (if (#{200 201} status)
-                              (json/decode body true)
-                              (ex-info "put!: error"
-                                       {:status status
-                                        :es-error (json/decode body true)}))))]
-    (if id
-      (http/put (str (ec/url cluster index) "/" type "/" id
-                     (when version (str "?version=" version)))
-                {:headers {"Content-Type" "application/json"}
-                 :body (json/encode (->es-value doc))}
-                callback)
-      (http/post (str (ec/url cluster index) "/" type "/")
-                 {:headers {"Content-Type" "application/json"}
-                  :body (json/encode (->es-value doc))}
-                 callback))
-    result))
+  [cluster index type doc
+   & {:keys [id parent version ttl refresh]
+      :or {refresh false}
+      :as args}]
+  {:pre [(contains? #{true false :wait-for} refresh)]}
+  ;; TODO - parent, ttl
+  (cluster/run cluster
+    {:http
+     {:method (if id :put :post)
+      :id ::put
+      :url (merge
+            {:cluster cluster
+             :indices index
+             :type type
+             :query (merge
+                     {:refresh refresh}
+                     (when id {:version version}))}
+            (when id {:segments [id]}))
+      :headers {"Content-Type" "application/json"}
+      :body doc}}))
 
 (defn update!
   "Merges the contents of 'update-doc' into the document identified by 'type'
@@ -149,25 +148,22 @@
       update to succeed. This is useful as a form of optimistic locking"
   [cluster index type id & {:keys [update-doc script
                                    detect-no-op retry-on-conflict parent
-                                   version] :as args}]
+                                   version]}]
   {:pre [(xor update-doc script)]}
-  (let [result (ec/promise)
-        url (str (ec/url cluster index) "/" type "/" id "/_update"
-                 (when version (str "?version=" version)))
-        callback (fn [{:keys [status headers body error]}]
-                   (deliver result
-                            (if (#{200 201} status)
-                              (json/decode body true)
-                              (ex-info "update!: error"
-                                       {:status status
-                                        :es-error (json/decode body true)}))))]
-    (http/post url
-               {:headers {"Content-Type" "application/json"}
-                :body (json/encode
-                       (compact {(if script :script :doc) (->es-value script)
-                                 :detect_noop detect-no-op}))}
-               callback)
-    result))
+  ;; TODO - retry-on-conflict, parent
+  (cluster/run cluster
+    {:http
+     {:method :post
+      :id ::update
+      :url {:cluster cluster
+            :indices index
+            :type type
+            :segments [id "_update"]
+            :query (when version {:version version})}
+      :headers {"Content-Type" "application/json"}
+      :body (compact
+             {(if script :script :doc) (or script update-doc)
+              :detect_noop detect-no-op})}}))
 
 (defn upsert!
   "Merges the contents of 'update-doc' into the document identified by 'type'
@@ -201,27 +197,23 @@
    & {:keys [insert-doc doc-as-upsert
              update-doc script
              detect-no-op retry-on-conflict
-             parent version callback] :as args}]
+             parent version callback]}]
   {:pre [(or insert-doc doc-as-upsert) (xor update-doc script)]}
-  (let [result (ec/promise)
-        url (str (ec/url cluster index) "/" type "/" id "/_update"
-                 (when version (str "?version=" version)))
-        callback (fn [{:keys [status headers body error]}]
-                   (deliver result
-                            (if (#{200 201} status)
-                              (json/decode body true)
-                              (ex-info "upsert!: error"
-                                       {:status status
-                                        :es-error (json/decode body true)}))))]
-    (http/post url
-               {:headers {"Content-Type" "application/json"}
-                :body (json/encode
-                       (compact {(if script :script :doc) (->es-value script)
-                                 :detect_noop detect-no-op
-                                 :upsert insert-doc
-                                 :doc_as_upsert doc-as-upsert}))}
-               callback)
-    result))
+  ;; TODO - retry-on-conflict, parent, callback
+  (cluster/run cluster
+    {:http
+     {:method :post
+      :id ::upsert
+      :url {:cluster cluster
+            :indices index
+            :type type
+            :segments [id "_update"]
+            :query (when version {:version version})}
+      :headers {"Content-Type" "application/json"}
+      :body (compact {(if script :script :doc) (or script update-doc)
+                      :detect_noop detect-no-op
+                      :upsert insert-doc
+                      :doc_as_upsert doc-as-upsert})}}))
 
 (defn delete!
   "Deletes a document of 'type' with 'id' from 'index'.
@@ -234,17 +226,16 @@
     :version - The version provided must match the version of the document in
        the index for the delete to succeed. This is useful to ensure that the
        document is not being deleted after another operation has updated it"
-  [cluster index type id & {:keys [version] :as args}]
-  (let [result (ec/promise)]
-    (http/delete (str (st/join "/" [(ec/url cluster index) type id])
-                      (when version (str "?version=" version)))
-                 (fn [{:keys [status headers body error]}]
-                   (deliver result
-                            (case (long status)
-                              200 (json/decode body true)
-                              (ex-info "delete!: error"
-                                       {:es-error (json/decode body true)})))))
-    result))
+  [cluster index type id & {:keys [version]}]
+  (cluster/run cluster
+    {:http
+     {:method :delete
+      :id ::delete
+      :url {:cluster cluster
+            :indices index
+            :type type
+            :segments [id]
+            :query (when version {:version version})}}}))
 
 (defn search
   "Executes 'query' across the collection of 'indices' in the Elasticsearch
@@ -256,23 +247,55 @@
     :sorts - A collection of sort criteria to apply to the result set
     :start and :size - A start index and a page size for the results. It is
       recommended that the scan and scroll API be used if deep paging is
-      required"
-  [cluster indices query  & {:keys [types sorts start size explain]
-                             :as args}]
+      required
+    :timeout - Bound the search with a timeout. Return accumulated results up to
+      the timeout point if the timeout occurs.
+      https://www.elastic.co/guide/en/elasticsearch/reference/6.3/common-options.html#time-units
+    :search-type - Type of search operation. Can be either :dfs-query-then-fetch
+      or :query-then-fetch
+    :request-cache - Set to true or false to enable or disable the caching of
+      search results for requests where size is 0.
+    :allow-partial-search-results - Set to false to return an overall failure if
+      the request would produce partial results. Defaults to true, which will
+      allow partial results in the case of timeouts or partial failures.
+    :terminate-after - The maximum number of documents to collect for each
+      shard, upon reaching which the query execution will terminate early.
+    :batched-reduce-size - The number of shard results that should be reduced at
+      once on the coordinating node.
 
-  (let [result (ec/promise)
-        query (compact {:query query
-                        :from start
-                        :size size
-                        :sort sorts})]
-    (http/get (str (ec/url cluster indices) "/_search")
-              {:headers {"Content-Type" "application/json"}
-               :body (json/encode query)}
-              (fn [{:keys [status headers body error]}]
-                (deliver result
-                         (if (= 200 status)
-                           (json/decode body true)
-                           (ex-info "search: error"
-                                    {:status status
-                                     :es-error (json/decode body true)})))))
-    result))
+  https://www.elastic.co/guide/en/elasticsearch/reference/6.3/search-request-body.html"
+  [cluster indices query
+   & {:keys [types sorts
+             start size
+             explain
+             source-filter
+             aggregations
+             timeout
+             search-type
+             request-cache
+             allow-partial-search-results
+             terminate-after
+             batched-reduce-size]
+      :or {start 0
+           size 10}}]
+  (cluster/run cluster
+    {:http
+     {:method :get
+      :id ::search
+      :url {:cluster cluster
+            :indices indices
+            :segments ["_search"]}
+      :headers {"Content-Type" "application/json"}
+      :body (merge
+             {:query query}
+             (compact
+              {:_source source-filter
+               :aggregations aggregations
+               :timeout timeout
+               :from start
+               :size size
+               :search_type ((fsafe ->es-key) search-type)
+               :request_cache request-cache
+               :allow_partial_search_results allow-partial-search-results
+               :terminate_after terminate-after
+               :batched_reduce_size batched-reduce-size}))}}))

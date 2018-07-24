@@ -12,7 +12,10 @@
   "Functions for the generation of queries that can be used with
   elastica.core/search"
   (:refer-clojure :exclude [range type])
-  (:require [utilis.map :refer [assoc-if compact]]
+  (:require [elastica.impl.coercion :refer [->es ->es-key es-> es-key->]]
+            [utilis.types.keyword :refer [->keyword]]
+            [utilis.map :refer [assoc-if compact map-keys]]
+            [utilis.fn :refer [fsafe]]
             [clojure.string :as st]))
 
 (defn bool
@@ -209,6 +212,7 @@
                         type
                         minimum-should-match boost]
                  :or {lenient false
+                      operator :or
                       zero-terms-query :none}}]
   {:pre [(#{:or :and} operator)
          (#{:all :none} zero-terms-query)]}
@@ -355,3 +359,38 @@
   "Multiplies the score with 'weight'"
   [weight]
   {:weight weight})
+
+(defn more-like-this
+  "Find documents similar to those provided in the 'like' parameter, different
+  from those provided in the 'unlike' parameter, on the 'fields' provided.
+
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-mlt-query.html"
+  [like fields & {:keys [unlike
+                         min-term-freq
+                         max-query-terms]
+                  :or {min-term-freq 1
+                       max-query-terms 12}}]
+  {:pre [(seq fields)
+         (or (string? like)
+             (and (coll? like)
+                  (every? #(or (map? %)
+                               (string? %))
+                          like)))]}
+  (compact
+   {:more_like_this
+    {:fields (map ->es-key fields)
+     :like (if (string? like)
+             like
+             (map (fn [like]
+                    (cond
+                      (string? like) like
+                      (map? like)
+                      (-> (map-keys ->keyword like)
+                          (update :doc (fsafe ->es))
+                          (update :_type (fsafe ->es-key))
+                          (update :_index (fsafe ->es-key))
+                          compact)
+                      :else like)) like))
+     :unlike unlike
+     :min_term_freq min-term-freq
+     :max_query_terms max-query-terms}}))

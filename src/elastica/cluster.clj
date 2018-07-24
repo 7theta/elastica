@@ -11,7 +11,9 @@
 (ns elastica.cluster
   "The starting point for interacting with an Elasticsearch cluster via
   the creation of a REST client."
-  (:require [utilis.fn :refer [apply-kw]]
+  (:require [elastica.impl.fx :refer [http-interceptor]]
+            [elastica.impl.interceptors :as interceptors]
+            [utilis.fn :refer [apply-kw]]
             [integrant.core :as ig]))
 
 (declare client)
@@ -20,7 +22,7 @@
   (apply-kw client args))
 
 (defmethod ig/halt-key! :elastica.cluster/client [_ client]
-  (dissoc client :hosts))
+  (swap! client dissoc :hosts))
 
 (defn client
   "Creates an instance of a REST client that connects to a cluster.
@@ -30,6 +32,18 @@
     :hosts - A seq of hosts provided in the form of [hostname port]. If no host
       information is provided, an attempt will be made to connect to a locally
       running Elasticsearch node."
-  [& {:keys [hosts]
+  [& {:keys [hosts interceptors]
       :or {hosts [["localhost" 9200]]}}]
-  (atom {:hosts hosts}))
+  (atom {:hosts hosts
+         :context {:stack []
+                   :queue
+                   (-> []
+                       (concat interceptors)
+                       (concat [http-interceptor]))}}))
+
+(defn run
+  [cluster effects]
+  (->> effects
+       (merge (:context @cluster))
+       interceptors/run
+       :http/result))
