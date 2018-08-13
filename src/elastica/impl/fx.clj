@@ -78,6 +78,7 @@
                             (ex-info "HTTP Error"
                                      {:status status
                                       :request (dissoc http :url :es-> :response-xform)
+                                      :response response
                                       :es-error (:body response)}))))]
                 (deliver result (response-xform response)))))
            (assoc context :http/result result))

@@ -18,7 +18,7 @@
             [elastica.impl.coercion :refer [->es-key]]
             [elastica.cluster :as cluster]
             [utilis.fn :refer [fsafe]]
-            [utilis.map :refer [compact]]
+            [utilis.map :refer [compact map-keys]]
             [utilis.logic :refer [xor]]
             [clojure.string :as st]))
 
@@ -266,6 +266,7 @@
   https://www.elastic.co/guide/en/elasticsearch/reference/6.3/search-request-body.html"
   [cluster indices query
    & {:keys [types sorts
+             suggest
              start size
              explain
              source-filter
@@ -275,7 +276,8 @@
              request-cache
              allow-partial-search-results
              terminate-after
-             batched-reduce-size]
+             batched-reduce-size
+             highlight]
       :or {start 0
            size 10}}]
   (cluster/run cluster
@@ -287,15 +289,18 @@
             :segments ["_search"]}
       :headers {"Content-Type" "application/json"}
       :body (merge
-             {:query query}
-             (compact
-              {:_source source-filter
-               :aggregations aggregations
-               :timeout timeout
-               :from start
-               :size size
-               :search_type ((fsafe ->es-key) search-type)
-               :request_cache request-cache
-               :allow_partial_search_results allow-partial-search-results
-               :terminate_after terminate-after
-               :batched_reduce_size batched-reduce-size}))}}))
+             (when query {:query query})
+             suggest
+             (->> {:_source source-filter
+                   :aggregations aggregations
+                   :timeout timeout
+                   :from start
+                   :size size
+                   :search_type ((fsafe ->es-key) search-type)
+                   :request_cache request-cache
+                   :allow_partial_search_results allow-partial-search-results
+                   :terminate_after terminate-after
+                   :batched_reduce_size batched-reduce-size
+                   :highlight (update highlight :fields (partial map-keys ->es-key))}
+                  (filter (comp some? second))
+                  (into {})))}}))

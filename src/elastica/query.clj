@@ -207,23 +207,34 @@
 
   https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-match-query.html"
   [field text & {:keys [phrase
+                        phrase-prefix
                         operator analyzer lenient fuzziness
                         zero-terms-query cutoff-frequency
                         type
                         minimum-should-match boost]
                  :or {lenient false
-                      operator :or
                       zero-terms-query :none}}]
-  {:pre [(#{:or :and} operator)
-         (#{:all :none} zero-terms-query)]}
+  {:pre [(#{:all :none} zero-terms-query)]}
   (compact
-   {(if phrase :match_phrase :match)
-    {field (if (or operator zero-terms-query cutoff-frequency analyzer)
+   {(cond
+      phrase :match_phrase
+      phrase-prefix :match_phrase_prefix
+      :else :match)
+    {field (if (or operator
+                   zero-terms-query
+                   cutoff-frequency
+                   analyzer
+                   fuzziness
+                   phrase)
              {:query text
-              :operator (clojure.core/name operator)
+              :operator ((fsafe clojure.core/name) operator)
               :zero_terms_query (clojure.core/name zero-terms-query)
               :cutoff_frequency cutoff-frequency
-              :analyzer analyzer}
+              :analyzer analyzer
+              :boost boost
+              :fuzziness (if (keyword? fuzziness)
+                           (st/upper-case (name fuzziness))
+                           fuzziness)}
              text)}}))
 
 (defn match-all
@@ -365,32 +376,48 @@
   from those provided in the 'unlike' parameter, on the 'fields' provided.
 
   https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-mlt-query.html"
-  [like fields & {:keys [unlike
-                         min-term-freq
-                         max-query-terms]
-                  :or {min-term-freq 1
-                       max-query-terms 12}}]
-  {:pre [(seq fields)
-         (or (string? like)
+  [like & {:keys [unlike
+                  fields
+                  min-term-freq
+                  max-query-terms]
+           :or {min-term-freq 1
+                max-query-terms 12}}]
+  {:pre [(or (string? like)
              (and (coll? like)
                   (every? #(or (map? %)
                                (string? %))
                           like)))]}
   (compact
    {:more_like_this
-    {:fields (map ->es-key fields)
-     :like (if (string? like)
-             like
-             (map (fn [like]
-                    (cond
-                      (string? like) like
-                      (map? like)
-                      (-> (map-keys ->keyword like)
-                          (update :doc (fsafe ->es))
-                          (update :_type (fsafe ->es-key))
-                          (update :_index (fsafe ->es-key))
-                          compact)
-                      :else like)) like))
-     :unlike unlike
-     :min_term_freq min-term-freq
-     :max_query_terms max-query-terms}}))
+    (merge
+     (when (seq fields)
+       {:fields (map ->es-key fields)})
+     {:like (if (string? like)
+              like
+              (map (fn [like]
+                     (cond
+                       (string? like) like
+                       (map? like)
+                       (-> (map-keys ->keyword like)
+                           (update :doc (fsafe ->es))
+                           (update :_type (fsafe ->es-key))
+                           (update :_index (fsafe ->es-key))
+                           compact)
+                       :else like)) like))
+      :unlike unlike
+      :min_term_freq min-term-freq
+      :max_query_terms max-query-terms})}))
+
+(defn suggest
+  "The completion suggester provides auto-complete/search-as-you-type
+  functionality. This is a navigational feature to guide users to relevant
+  results as they are typing, improving search precision. It is not meant for
+  spell correction or did-you-mean functionality like the term or phrase
+  suggesters.
+
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters-completion.html"
+  [field prefix & {:keys [name] :or {name :suggest}}]
+  {:suggest
+   {name
+    {:prefix prefix
+     :completion {:field field}}}})
