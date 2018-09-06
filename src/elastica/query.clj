@@ -210,11 +210,11 @@
                         phrase-prefix
                         operator analyzer lenient fuzziness
                         zero-terms-query cutoff-frequency
+                        max-expansions prefix-length
                         type
                         minimum-should-match boost]
                  :or {lenient false
                       zero-terms-query :none}}]
-  {:pre [(#{:all :none} zero-terms-query)]}
   (compact
    {(cond
       phrase :match_phrase
@@ -226,15 +226,18 @@
                    analyzer
                    fuzziness
                    phrase)
-             {:query text
-              :operator ((fsafe clojure.core/name) operator)
-              :zero_terms_query (clojure.core/name zero-terms-query)
-              :cutoff_frequency cutoff-frequency
-              :analyzer analyzer
-              :boost boost
-              :fuzziness (if (keyword? fuzziness)
-                           (st/upper-case (name fuzziness))
-                           fuzziness)}
+             (merge
+              {:query text
+               :zero_terms_query ((fsafe clojure.core/name) zero-terms-query)
+               :max_expansions max-expansions
+               :prefix_length prefix-length
+               :operator ((fsafe clojure.core/name) operator)
+               :cutoff_frequency cutoff-frequency
+               :analyzer analyzer
+               :boost boost
+               :fuzziness (if (keyword? fuzziness)
+                            (st/upper-case (name fuzziness))
+                            fuzziness)})
              text)}}))
 
 (defn match-all
