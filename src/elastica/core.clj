@@ -291,7 +291,11 @@
       :body (merge
              (when query {:query query})
              suggest
-             (->> {:_source source-filter
+             (->> {:_source (if (map? source-filter)
+                              (compact
+                               (update source-filter :excludes
+                                       (partial map ->es-key)))
+                              source-filter)
                    :aggregations aggregations
                    :timeout timeout
                    :from start

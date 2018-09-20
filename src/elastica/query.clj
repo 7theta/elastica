@@ -419,8 +419,10 @@
   suggesters.
 
   https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters-completion.html"
-  [field prefix & {:keys [name] :or {name :suggest}}]
-  {:suggest
-   {name
-    {:prefix prefix
-     :completion {:field field}}}})
+  [field prefix & {:keys [name fuzziness] :or {name :suggest}}]
+  (compact
+   {:suggest
+    {name
+     {:prefix prefix
+      :completion {:field field
+                   :fuzzy {:fuzziness fuzziness}}}}}))

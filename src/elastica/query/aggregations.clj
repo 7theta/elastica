@@ -8,9 +8,12 @@
 
 ;;; Public
 
+(defn value-count
+  [field & {:keys [name] :or {name :value_count}}]
+  (xform-field {name {:value_count {:field field}}}))
+
 (defn significant-terms
   [field & {:keys [name] :or {name :significant_terms_agg}}]
-  {:pre [field name]}
   (xform-field {name {:significant_terms {:field field}}}))
 
 (defn terms
@@ -30,7 +33,6 @@
 (defn significant-text
   [field & {:keys [name filter-duplicate-text]
             :or {name :significant_text_agg}}]
-  {:pre [field name]}
   (xform-field
    (compact
     {name
