@@ -12,6 +12,10 @@
   [field & {:keys [name] :or {name :value_count}}]
   (xform-field {name {:value_count {:field field}}}))
 
+(defn cardinality
+  [field & {:keys [name] :or {name :cardinality}}]
+  (xform-field {name {:cardinality {:field field}}}))
+
 (defn significant-terms
   [field & {:keys [name] :or {name :significant_terms_agg}}]
   (xform-field {name {:significant_terms {:field field}}}))
