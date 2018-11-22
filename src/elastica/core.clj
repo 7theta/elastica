@@ -345,7 +345,8 @@
               :segments ["_search" "scroll" "_all"]}}}
       {:http
        {:method :delete
-        :id ::clear-scroll-all
+        :id ::clear-scroll
         :url {:cluster cluster
               :segments ["_search" "scroll"]}
+        :headers {"Content-Type" "application/json"}
         :body {:scroll-id scroll-id}}})))
