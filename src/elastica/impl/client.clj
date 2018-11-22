@@ -31,7 +31,10 @@
            :port port
            :query query
            :segments (concat
-                      (map name (if (coll? indices) indices [indices]))
+                      (map name (cond
+                                  (coll? indices) indices
+                                  (nil? indices) nil
+                                  :else [indices]))
                       (when type [type])
                       segments)}))))
 

@@ -308,3 +308,44 @@
                    :highlight (update highlight :fields (partial map-keys ->es-key))}
                   (filter (comp some? second))
                   (into {})))}}))
+
+(defn scroll
+  "https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html"
+  [cluster indices query
+   & {:keys [size scroll-id scan scroll source]
+      :or {size 1000
+           scroll "1m"}}]
+  (cluster/run cluster
+    {:http
+     {:method :post
+      :id ::scroll
+      :url (merge
+            (when-not scroll-id {:indices indices})
+            {:cluster cluster
+             :segments (if scroll-id
+                         ["_search" "scroll"]
+                         ["_search"])
+             :query {:scroll scroll}})
+      :headers {"Content-Type" "application/json"}
+      :body  (merge
+              (when query {:query query})
+              (when (and size (not scroll-id)) {:size size})
+              (when scroll-id {:scroll-id scroll-id})
+              (when-not scroll-id {:_source source}))}}))
+
+(defn clear-scroll
+  "https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html"
+  [cluster indices & {:keys [scroll-id] :or {scroll-id :all}}]
+  (cluster/run cluster
+    (if (= scroll-id :all)
+      {:http
+       {:method :delete
+        :id ::clear-scroll-all
+        :url {:cluster cluster
+              :segments ["_search" "scroll" "_all"]}}}
+      {:http
+       {:method :delete
+        :id ::clear-scroll-all
+        :url {:cluster cluster
+              :segments ["_search" "scroll"]}
+        :body {:scroll-id scroll-id}}})))

@@ -38,9 +38,16 @@
                                     url
                                     (ec/url
                                      (:cluster url)
-                                     :indices (if (coll? (:indices url))
+                                     :indices (cond
+
+                                                (coll? (:indices url))
                                                 (map ->es-key (:indices url))
-                                                (->es-key (:indices url)))
+
+                                                (or (string? (:indices url))
+                                                    (keyword? (:indices url)))
+                                                (->es-key (:indices url))
+
+                                                :else nil)
                                      :type (->es-key (:type url))
                                      :segments (:segments url)
                                      :query (->> url :query ->es (map-vals ->es-key)))))))
