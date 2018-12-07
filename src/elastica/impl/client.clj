@@ -15,7 +15,7 @@
 
 (defn base-url
   [cluster & {:keys [method] :or {method :http}}]
-  (let [[hostname port] (-> cluster deref :hosts first)]
+  (let [[hostname port] (-> cluster deref :hosts rand-nth)]
     (url/url {:method method
               :hostname hostname
               :port port})))
@@ -24,7 +24,7 @@
   [cluster
    & {:keys [indices method query segments query type]
       :or {method :http}}]
-  (let [[hostname port] (-> cluster deref :hosts first)]
+  (let [[hostname port] (-> cluster deref :hosts rand-nth)]
     (str (url/url
           {:method method
            :hostname hostname

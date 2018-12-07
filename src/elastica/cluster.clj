@@ -47,3 +47,12 @@
        (merge (:context @cluster))
        interceptors/run
        :http/result))
+
+(defn health
+  [cluster]
+  (run cluster
+    {:http
+     {:method :get
+      :id :cluster-health
+      :url {:cluster cluster
+            :segments ["_cluster" "health"]}}}))
