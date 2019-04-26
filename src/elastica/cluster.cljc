@@ -11,8 +11,7 @@
 (ns elastica.cluster
   "The starting point for interacting with an Elasticsearch cluster via
   the creation of a REST client."
-  (:require [elastica.impl.fx :refer [http-interceptor]]
-            [elastica.impl.interceptors :as interceptors]
+  (:require [elastica.impl.http :as http]
             [utilis.fn :refer [apply-kw]]
             [integrant.core :as ig]))
 
@@ -34,25 +33,20 @@
       running Elasticsearch node."
   [& {:keys [hosts interceptors]
       :or {hosts [["localhost" 9200]]}}]
-  (atom {:hosts hosts
-         :context {:stack []
-                   :queue
-                   (-> []
-                       (concat interceptors)
-                       (concat [http-interceptor]))}}))
+  (atom {:hosts hosts}))
 
 (defn run
-  [cluster effects]
-  (->> effects
-       (merge (:context @cluster))
-       interceptors/run
-       :http/result))
+  [cluster request]
+  (let [[hostname port] (-> cluster deref :hosts rand-nth)]
+    (http/run
+      (assoc
+       request
+       :hostname hostname
+       :port port))))
 
 (defn health
   [cluster]
   (run cluster
-    {:http
-     {:method :get
-      :id :cluster-health
-      :url {:cluster cluster
-            :segments ["_cluster" "health"]}}}))
+    {:method :get
+     :url {:cluster cluster
+           :segments ["_cluster" "health"]}}))

@@ -20,10 +20,12 @@
 (defn ->es-key
   [k]
   (when k
-    (->> k name
-         underscore
-         (str (when-let [ns (when (keyword? k) (namespace k))]
-                (str ns "/"))))))
+    (if (boolean? k)
+      (str k)
+      (->> k name
+           underscore
+           (str (when-let [ns (when (keyword? k) (namespace k))]
+                  (str ns "/")))))))
 
 (defn es-key->
   [k]

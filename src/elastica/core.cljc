@@ -9,13 +9,14 @@
 ;;   You must not remove this notice, or any others, from this software.
 
 (ns elastica.core
-  "Functions required to work with documents in Elasticsearch indices.
+  "Functions required to work with documents in Elasticsearch indexes.
 
   If bulk interactions are required, the functions in the elastica.batch
   namespace should be used instead."
-  (:refer-clojure :exclude [get type sort])
+  (:refer-clojure :exclude [get sort])
   (:require [elastica.impl.client :as ec]
             [elastica.impl.coercion :refer [->es-key]]
+            [elastica.impl.http :as http]
             [elastica.cluster :as cluster]
             [utilis.fn :refer [fsafe]]
             [utilis.map :refer [compact map-keys]]
@@ -28,11 +29,6 @@
   "Return the index that 'doc' was retrieved from"
   [doc]
   (:_index doc))
-
-(defn type
-  "Return the type of 'doc'"
-  [doc]
-  (:_type doc))
 
 (defn id
   "Return the id of 'doc'"
@@ -67,21 +63,19 @@
   (:_source doc))
 
 (defn get
-  "Returns the contents of the document of 'type' with 'id' from 'index'.
+  "Returns the contents of the document of 'id' from 'index'.
   The keys in the document will be converted to keywords. If the document is
   not found, a nil will be returned"
-  [cluster index type id]
+  [cluster index id]
   (cluster/run cluster
-    {:http
-     {:method :get
-      :id ::get
-      :url {:cluster cluster
-            :indices index
-            :type type
-            :segments [id]}}}))
+    {:uri (http/uri
+           {:indexes index
+            :segments ["_doc" id]})
+     :method :get
+     :response-xform http/missing-response-xform}))
 
 (defn put!
-  "Puts 'doc' of 'type' into 'index'.
+  "Puts 'doc' into 'index'.
 
   The created? function can be used to check whether the put led to a fresh
   document being added or the replacement of an existing one.
@@ -98,34 +92,28 @@
     :ttl - A positive value in milliseconds can be provided to control how long
       a document will live in the index before it is automatically deleted.
       The type's mapping must enable the '_ttl' field and the sweep of the index
-      can be controlled via the 'indiced.ttl.interval' and 'indices.ttl.bulk_size'
+      can be controlled via the 'indiced.ttl.interval' and 'indexes.ttl.bulk_size'
       index settings"
-  [cluster index type doc
+  [cluster index doc
    & {:keys [id parent version ttl refresh]
       :or {refresh false}
       :as args}]
   {:pre [(contains? #{true false :wait-for} refresh)]}
-  ;; TODO - parent, ttl
   (cluster/run cluster
-    {:http
-     {:method (if id :put :post)
-      :id ::put
-      :url (merge
-            {:cluster cluster
-             :indices index
-             :type type
-             :query (merge
-                     {:refresh refresh}
-                     (when id {:version version}))}
-            (when id {:segments [id]}))
-      :headers {"Content-Type" "application/json"}
-      :body doc}}))
+    {:method (if id :put :post)
+     :uri (http/uri
+           {:segments (concat ["_doc"] (when id [id]))
+            :indexes index})
+     :query (merge
+             {:refresh refresh}
+             (when version {:version version}))
+     :body (dissoc doc :id)}))
 
 (defn update!
-  "Merges the contents of 'update-doc' into the document identified by 'type'
-  and 'id' in 'index'. The fields from 'update-doc' will entirely replace the
-  fields in the existing document. Alternatively a 'script' can be specified
-  that will be run against the existing document to create the new version.
+  "Merges the contents of 'update-doc' into the document identified by 'id' in
+  'index'. The fields from 'update-doc' will entirely replace the fields in the
+  existing document. Alternatively a 'script' can be specified that will be run
+  against the existing document to create the new version.
 
   If a document does not exist, an exception will be thrown.
 
@@ -146,28 +134,23 @@
     :version - If the update! is replacing an existing document, the version
       provided must match the version of the document in the index for the
       update to succeed. This is useful as a form of optimistic locking"
-  [cluster index type id & {:keys [update-doc script
-                                   detect-no-op retry-on-conflict parent
-                                   version]}]
+  [cluster index id & {:keys [update-doc script
+                              detect-no-op retry-on-conflict parent
+                              version]}]
   {:pre [(xor update-doc script)]}
-  ;; TODO - retry-on-conflict, parent
   (cluster/run cluster
-    {:http
-     {:method :post
-      :id ::update
-      :url {:cluster cluster
-            :indices index
-            :type type
-            :segments [id "_update"]
-            :query (when version {:version version})}
-      :headers {"Content-Type" "application/json"}
-      :body (compact
-             {(if script :script :doc) (or script update-doc)
-              :detect_noop detect-no-op})}}))
+    {:method :post
+     :uri (http/uri
+           {:indexes index
+            :segments ["_update" id]})
+     :query (when version {:version version})
+     :body (compact
+            {(if script :script :doc) (or script update-doc)
+             :detect_noop detect-no-op})}))
 
 (defn upsert!
-  "Merges the contents of 'update-doc' into the document identified by 'type'
-  and 'id' in 'index'. The fields from 'update-doc' will entirely replace the
+  "Merges the contents of 'update-doc' into the document identified by
+  'id' in 'index'. The fields from 'update-doc' will entirely replace the
   fields in the existing document. Alternatively a 'script' can be specified
   that will be run against the existing document to create the new version.
 
@@ -193,30 +176,26 @@
     :version - If the upsert! is replacing an existing document, the version
       provided must match the version of the document in the index for the
       upsert to succeed. This is useful as a form of optimistic locking"
-  [cluster index type id
+  [cluster index id
    & {:keys [insert-doc doc-as-upsert
              update-doc script
              detect-no-op retry-on-conflict
              parent version callback]}]
   {:pre [(or insert-doc doc-as-upsert) (xor update-doc script)]}
-  ;; TODO - retry-on-conflict, parent, callback
   (cluster/run cluster
-    {:http
-     {:method :post
-      :id ::upsert
-      :url {:cluster cluster
-            :indices index
-            :type type
-            :segments [id "_update"]
-            :query (when version {:version version})}
-      :headers {"Content-Type" "application/json"}
-      :body (compact {(if script :script :doc) (or script update-doc)
-                      :detect_noop detect-no-op
-                      :upsert insert-doc
-                      :doc_as_upsert doc-as-upsert})}}))
+    {:method :post
+     :uri (http/uri
+           {:indexes index
+            :segments ["_update" id]})
+     :query (when version {:version version})
+     :body (compact
+            {(if script :script :doc) (or script update-doc)
+             :detect_noop detect-no-op
+             :upsert insert-doc
+             :doc_as_upsert doc-as-upsert})}))
 
 (defn delete!
-  "Deletes a document of 'type' with 'id' from 'index'.
+  "Deletes a document with 'id' from 'index'.
 
   If a document with 'id' does not exist, the :found? key in the result
   will be false.
@@ -226,19 +205,16 @@
     :version - The version provided must match the version of the document in
        the index for the delete to succeed. This is useful to ensure that the
        document is not being deleted after another operation has updated it"
-  [cluster index type id & {:keys [version]}]
+  [cluster index id & {:keys [version]}]
   (cluster/run cluster
-    {:http
-     {:method :delete
-      :id ::delete
-      :url {:cluster cluster
-            :indices index
-            :type type
-            :segments [id]
-            :query (when version {:version version})}}}))
+    {:method :delete
+     :uri (http/uri
+           {:indexes index
+            :segments [id]})
+     :query (when version {:version version})}))
 
 (defn search
-  "Executes 'query' across the collection of 'indices' in the Elasticsearch
+  "Executes 'query' across the collection of 'indexes' in the Elasticsearch
   'cluster' and returns the results.
 
   The following optional keyword parameters can be used to control
@@ -264,7 +240,7 @@
       once on the coordinating node.
 
   https://www.elastic.co/guide/en/elasticsearch/reference/6.3/search-request-body.html"
-  [cluster indices query
+  [cluster indexes query
    & {:keys [types sorts
              suggest
              start size
@@ -281,72 +257,61 @@
       :or {start 0
            size 10}}]
   (cluster/run cluster
-    {:http
-     {:method :get
-      :id ::search
-      :url {:cluster cluster
-            :indices indices
-            :segments ["_search"]}
-      :headers {"Content-Type" "application/json"}
-      :body (merge
-             (when query {:query query})
-             suggest
-             (->> {:_source (if (map? source-filter)
-                              (compact
-                               (update source-filter :excludes
-                                       (partial map ->es-key)))
-                              source-filter)
-                   :aggregations aggregations
-                   :timeout timeout
-                   :from start
-                   :size size
-                   :search_type ((fsafe ->es-key) search-type)
-                   :request_cache request-cache
-                   :allow_partial_search_results allow-partial-search-results
-                   :terminate_after terminate-after
-                   :batched_reduce_size batched-reduce-size
-                   :highlight (update highlight :fields (partial map-keys ->es-key))}
-                  (filter (comp some? second))
-                  (into {})))}}))
+    {:method :get
+     :uri (http/uri
+           {:indexes indexes
+            :segments ["_search"]})
+     :body (merge
+            (when query {:query query})
+            suggest
+            (->> {:_source (if (map? source-filter)
+                             (compact
+                              (update source-filter :excludes
+                                      (partial map ->es-key)))
+                             source-filter)
+                  :aggregations aggregations
+                  :timeout timeout
+                  :from start
+                  :size size
+                  :search_type ((fsafe ->es-key) search-type)
+                  :request_cache request-cache
+                  :allow_partial_search_results allow-partial-search-results
+                  :terminate_after terminate-after
+                  :batched_reduce_size batched-reduce-size
+                  :highlight (update highlight :fields (partial map-keys ->es-key))}
+                 (filter (comp some? second))
+                 (into {})))}))
 
 (defn scroll
   "https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html"
-  [cluster indices query
+  [cluster indexes query
    & {:keys [size scroll-id scan scroll source]
       :or {size 1000
            scroll "1m"}}]
   (cluster/run cluster
-    {:http
-     {:method :post
-      :id ::scroll
-      :url (merge
-            (when-not scroll-id {:indices indices})
-            {:cluster cluster
-             :segments (if scroll-id
-                         ["_search" "scroll"]
-                         ["_search"])
-             :query {:scroll scroll}})
-      :headers {"Content-Type" "application/json"}
-      :body  (merge
-              (when query {:query query})
-              (when (and size (not scroll-id)) {:size size})
-              (when scroll-id {:scroll-id scroll-id})
-              (when-not scroll-id {:_source source}))}}))
+    {:method :post
+     :uri (http/uri
+           (merge
+            (when-not scroll-id
+              {:indexes indexes})
+            {:segments
+             (if scroll-id
+               ["_search" "scroll"]
+               ["_search"])}))
+     :query {:scroll scroll}
+     :body  (merge
+             (when query {:query query})
+             (when (and size (not scroll-id)) {:size size})
+             (when scroll-id {:scroll-id scroll-id})
+             (when-not scroll-id {:_source source}))}))
 
 (defn clear-scroll
   "https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html"
-  [cluster indices & {:keys [scroll-id] :or {scroll-id :all}}]
+  [cluster indexes & {:keys [scroll-id] :or {scroll-id :all}}]
   (cluster/run cluster
     (if (= scroll-id :all)
-      {:http
-       {:method :delete
-        :id ::clear-scroll-all
-        :url {:cluster cluster
-              :segments ["_search" "scroll" "_all"]}}}
-      {:http
-       {:method :delete
-        :id ::clear-scroll
-        :url {:cluster cluster
-              :segments ["_search" "scroll"]}
-        :headers {"Content-Type" "application/json"}
-        :body {:scroll-id scroll-id}}})))
+      {:method :delete
+       :uri (http/uri {:segments ["_search" "scroll" "_all"]})}
+      {:method :delete
+       :uri (http/uri {:segments ["_search" "scroll"]})
+       :body {:scroll-id scroll-id}})))

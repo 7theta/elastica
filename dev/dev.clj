@@ -17,6 +17,8 @@
             [elastica.query :as eq]
             [elastica.batch :as ecb]
 
+            [elastica.impl.coercion :as cc]
+
             [integrant.core :as ig]
 
             [integrant.repl :refer [clear go halt init reset reset-all set-prep!]]
@@ -51,15 +53,11 @@
 
 (defn gen-index-name
   []
-  (st/lower-case (str "test_index_" (gensym))))
+  (cc/es-key-> (st/lower-case (str "test_index_" (gensym)))))
 
 (defn gen-document
   []
   {:bar "baz"})
-
-(defn gen-type
-  []
-  :foo)
 
 (defn gen-id
   []
@@ -127,26 +125,24 @@
   []
   (with-index
     (fn [index-name]
-      (let [document (gen-document)
-            type (gen-type)]
+      (let [document (gen-document)]
         @(ei/ensure-index! (client) index-name)
         (boolean
-         (when-let [id (e/id @(e/put! (client) index-name type document))]
-           (= document (:_source @(e/get (client) index-name type id)))))))))
+         (when-let [id (e/id @(e/put! (client) index-name document))]
+           (= document (:_source @(e/get (client) index-name id)))))))))
 
 (defn test-update
   []
   (with-index
     (fn [index-name]
       (let [document (gen-document)
-            update-doc {:r (rand-int 1000)}
-            type (gen-type)]
+            update-doc {:r (rand-int 1000)}]
         @(ei/ensure-index! (client) index-name)
         (boolean
-         (when-let [id (e/id @(e/put! (client) index-name type document))]
-           @(e/update! (client) index-name type id :update-doc update-doc)
+         (when-let [id (e/id @(e/put! (client) index-name document))]
+           @(e/update! (client) index-name id :update-doc update-doc)
            (= (merge document update-doc)
-              (:_source @(e/get (client) index-name type id)))))))))
+              (:_source @(e/get (client) index-name id)))))))))
 
 (defn test-upsert
   []
@@ -154,24 +150,25 @@
     (fn [index-name]
       (let [document (gen-document)
             update-doc {:r (rand-int 1000)}
-            type (gen-type)
             id (gen-id)]
         @(ei/ensure-index! (client) index-name)
         (dotimes [_ 2]
-          @(e/upsert! (client) index-name type id :insert-doc document :update-doc update-doc))
+          @(e/upsert!
+            (client) index-name id
+            :insert-doc document
+            :update-doc update-doc))
         (= (merge document update-doc)
-           (:_source @(e/get (client) index-name type id)))))))
+           (:_source @(e/get (client) index-name id)))))))
 
 (defn test-delete
   []
   (with-index
     (fn [index-name]
-      (let [document (gen-document)
-            type (gen-type)]
+      (let [document (gen-document)]
         @(ei/ensure-index! (client) index-name)
         (boolean
-         (when-let [id (e/id @(e/put! (client) index-name type document))]
-           (try @(e/get (client) index-name type id)
+         (when-let [id (e/id @(e/put! (client) index-name document))]
+           (try @(e/get (client) index-name id)
                 (catch Exception e
                   (-> e ex-data :es-error :found false?)))))))))
 
@@ -181,12 +178,11 @@
   []
   (with-index
     (fn [index-name]
-      (let [document (gen-document)
-            type (gen-type)]
+      (let [document (gen-document)]
         @(ei/ensure-index! (client) index-name)
         (when-let [id (e/id
                        @(e/put!
-                         (client) index-name type document
+                         (client) index-name document
                          :refresh :wait-for))]
           (let [k (first (keys document))]
             (->> @(e/search
@@ -204,8 +200,7 @@
   (with-index
     (fn [index-name]
       (let [document1 {:name "John Smith"}
-            document2 {:name "Jonnie Smythe"}
-            type (name (gen-type))]
+            document2 {:name "Jonnie Smythe"}]
         @(ei/ensure-index!
           (client) index-name
           :settings {:shards 8
@@ -219,14 +214,14 @@
                                   {"tokenizer" "standard"
                                    "filter" "dbl_metaphone"}}}})
         @(ei/put-mapping!
-          (client) index-name type
+          (client) index-name
           {"name"
            {"type" "text"
             "fields" {"phonetic"
                       {"type" "text"
                        "analyzer" "dbl_metaphone"}}}})
-        @(e/put! (client) index-name type document1 :refresh :wait-for)
-        @(e/put! (client) index-name type document2 :refresh :wait-for)
+        @(e/put! (client) index-name document1 :refresh :wait-for)
+        @(e/put! (client) index-name document2 :refresh :wait-for)
         (->> @(e/search
                (client) [index-name]
                (eq/match "name.phonetic" "Jahnnie Smith" :operator :and))
@@ -244,6 +239,17 @@
        (filter (comp (partial re-find #"^test") str))
        (map (fn [test-fn] [(str test-fn) @(resolve test-fn)]))
        (map (fn [[test-name test-fn]]
-              (println "test results:" [test-name {:result (test-fn)}])))
+              (let [result (try (test-fn)
+                                (catch Exception e
+                                  e))]
+                (println
+                 "test results:"
+                 [test-name
+                  {:result
+                   (if (instance? Throwable result)
+                     false
+                     result)}])
+                (when (instance? Throwable result)
+                  (throw result)))))
        doall)
   nil)

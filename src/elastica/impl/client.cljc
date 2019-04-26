@@ -10,33 +10,7 @@
 
 (ns elastica.impl.client
   (:refer-clojure :exclude [promise])
-  (:require [elastica.impl.url :as url]
-            [clojure.string :as st]))
-
-(defn base-url
-  [cluster & {:keys [method] :or {method :http}}]
-  (let [[hostname port] (-> cluster deref :hosts rand-nth)]
-    (url/url {:method method
-              :hostname hostname
-              :port port})))
-
-(defn url
-  [cluster
-   & {:keys [indices method query segments query type]
-      :or {method :http}}]
-  (let [[hostname port] (-> cluster deref :hosts rand-nth)]
-    (str (url/url
-          {:method method
-           :hostname hostname
-           :port port
-           :query query
-           :segments (concat
-                      (map name (cond
-                                  (coll? indices) indices
-                                  (nil? indices) nil
-                                  :else [indices]))
-                      (when type [type])
-                      segments)}))))
+  (:require [clojure.string :as st]))
 
 (defn promise
   "Return a promise that behaves like clojure.core/promise, except
