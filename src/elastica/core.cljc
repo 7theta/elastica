@@ -107,7 +107,7 @@
      :query (merge
              {:refresh refresh}
              (when version {:version version}))
-     :body (dissoc doc :id)}))
+     :body doc}))
 
 (defn update!
   "Merges the contents of 'update-doc' into the document identified by 'id' in

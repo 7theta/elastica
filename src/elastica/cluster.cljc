@@ -48,5 +48,4 @@
   [cluster]
   (run cluster
     {:method :get
-     :url {:cluster cluster
-           :segments ["_cluster" "health"]}}))
+     :uri (http/uri {:segments ["_cluster" "health"]})}))

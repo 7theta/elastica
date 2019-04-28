@@ -196,9 +196,8 @@
   "Finds documents matching the provided sequence of IDs
 
   https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-ids-query.html"
-  [type id-list]
-  {:ids {:type type
-         :values (map name id-list)}})
+  [id-list]
+  {:ids {:values (map name id-list)}})
 
 (defn match
   "A family of match queries that accepts text/numerics/dates, analyzes them,
