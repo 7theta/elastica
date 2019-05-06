@@ -86,6 +86,21 @@
           (deliver result e))))
     result))
 
+(defn update-settings!
+  "Updates the index-level settings on 'index'.
+
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-update-settings.html"
+  [cluster index settings & {:keys [preserve-existing]}]
+  (cluster/run cluster
+    {:method :put
+     :uri (http/uri
+           {:indexes index
+            :segments ["_settings"]})
+     :query (when (some? preserve-existing)
+              {:preserve_existing preserve-existing})
+     :headers {"Content-Type" "application/json"}
+     :body settings}))
+
 (defn index
   [cluster index]
   (cluster/run cluster
