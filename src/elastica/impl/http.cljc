@@ -16,7 +16,7 @@
 
 #?(:clj (def json-mapper (json/object-mapper {:decode-key-fn true})))
 
-(declare query-string base-url)
+(declare query-string base-url serialize-body)
 
 ;;; API
 
@@ -38,9 +38,12 @@
        (st/join "/")))
 
 (defn default-response-xform
-  [{:keys [status header body error context] :as response}]
+  [{:keys [status headers body error context] :as response}]
   #?(:clj
-     (let [parse-body #(-> % (json/read-value json-mapper) es->)]
+     (let [parse-body #(try (if (re-find #"application/json" (:content-type headers))
+                              (-> % (json/read-value json-mapper) es->)
+                              %)
+                            (catch Exception e %))]
        (if (#{200 201} status)
          (parse-body body)
          (ex-info
@@ -80,10 +83,14 @@
                          query-string
                          (str (base-url protocol hostname port) "/" uri)))
         body (when body
-               #?(:clj (json/write-value-as-string (->es body))
-                  :cljs (js/JSON.stringify (->es body))))
-        headers (when body
-                  (merge {"Content-Type" "application/json"} headers))]
+               (cond
+                 (map? body) (serialize-body body)
+                 (coll? body) (str
+                               (->> body
+                                    (map serialize-body)
+                                    (st/join "\n"))
+                               "\n")))
+        headers (when body (merge {"Content-Type" "application/json"} headers))]
     #?(:clj
        (let [verb ({:put http/put
                     :post http/post
@@ -100,6 +107,11 @@
        :cljs (throw (ex-info "Not implemented" {:request request})))))
 
 ;;; Private
+
+(defn- serialize-body
+  [body]
+  #?(:clj (json/write-value-as-string (->es body))
+     :cljs (js/JSON.stringify (->es body))))
 
 (defn- base-url
   ([protocol hostname] (base-url protocol hostname nil))
@@ -148,7 +160,7 @@
 (s/def :arg/hostname string?)
 (s/def :arg/port integer?)
 (s/def :arg/uri valid/uri?)
-(s/def :arg/body map?)
+(s/def :arg/body (s/or ::map map? ::coll (s/coll-of map?)))
 (s/def :arg/headers (s/map-of :arg/keyword-or-string any?))
 (s/def :arg/method #{:put :post :get :delete :head :options})
 (s/def :arg/response-xform fn?)

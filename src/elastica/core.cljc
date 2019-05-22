@@ -315,3 +315,13 @@
       {:method :delete
        :uri (http/uri {:segments ["_search" "scroll"]})
        :body {:scroll-id scroll-id}})))
+
+(defn exists?
+  [cluster index doc-id]
+  (cluster/run cluster
+    {:method :head
+     :response-xform (comp boolean http/missing-response-xform)
+     :uri
+     (http/uri
+      {:indexes [index]
+       :segments ["_doc" doc-id]})}))

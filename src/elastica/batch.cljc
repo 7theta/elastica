@@ -8,6 +8,21 @@
 ;;   the terms of this license.
 ;;   You must not remove this notice, or any others, from this software.
 
-(ns elastica.batch)
+(ns elastica.batch
+  (:require [elastica.impl.client :as ec]
+            [elastica.impl.coercion :refer [->es-key]]
+            [elastica.impl.http :as http]
+            [elastica.cluster :as cluster]
+            [utilis.fn :refer [fsafe]]
+            [utilis.map :refer [compact map-keys]]
+            [utilis.logic :refer [xor]]
+            [clojure.string :as st]))
 
-;; TODO
+(defn bulk!
+  [cluster ops]
+  (cluster/run cluster
+    {:method :post
+     :uri (http/uri
+           {:segments
+            ["_bulk"]})
+     :body ops}))

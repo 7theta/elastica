@@ -136,13 +136,14 @@
   {:pre [(or (nil? score-mode) (#{:multiply :sum :avg :first :max :min} score-mode))
          (or (nil? boost-mode) (#{:multiply :replace :sum :avg :max :min} boost-mode))]}
   (compact
-   {:function_score {:query query
-                     :boost boost
-                     :functions functions
-                     :score-mode score-mode
-                     :min-score min-score
-                     :boost-mode boost-mode
-                     :max-boost max-boost}}))
+   {:function_score
+    {:query query
+     :boost boost
+     :functions functions
+     :score-mode score-mode
+     :min-score min-score
+     :boost-mode boost-mode
+     :max-boost max-boost}}))
 
 (defn fuzzy
   "The fuzzy query generates all possible matching terms that are within the
