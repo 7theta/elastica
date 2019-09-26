@@ -13,16 +13,62 @@
             [elastica.impl.coercion :refer [->es-key]]
             [elastica.impl.http :as http]
             [elastica.cluster :as cluster]
-            [utilis.fn :refer [fsafe]]
+            [utilis.timer :as ut]
+            [utilis.fn :refer [fsafe apply-kw]]
             [utilis.map :refer [compact map-keys]]
             [utilis.logic :refer [xor]]
-            [clojure.string :as st]))
+            [clojure.string :as st]
+            [integrant.core :as ig]))
 
-(defn bulk!
-  [cluster ops]
-  (cluster/run cluster
-    {:method :post
-     :uri (http/uri
-           {:segments
-            ["_bulk"]})
-     :body ops}))
+(declare processor shutdown enqueue process-queue)
+
+(defmethod ig/init-key :elastica.batch/processor [_ args]
+  (apply-kw processor args))
+
+(defmethod ig/halt-key! :elastica.batch/processor [_ processor]
+  (shutdown processor))
+
+(defn processor
+  [cluster & {:keys [count interval]}]
+  (let [queue (atom [])]
+    (merge
+     {:cluster cluster
+      :queue (atom [])}
+     (when count
+       {:count count})
+     (when interval
+       {:interval interval
+        :timer (ut/run-every (partial process-queue cluster queue) interval)}))))
+
+(defn shutdown
+  [processor]
+  (when (:timer processor) (ut/cancel (:timer processor)))
+  (process-queue (:cluster processor) (:queue processor)))
+
+(defn put!
+  [processor index doc & {:keys [id] :as args}]
+  (enqueue processor
+           {"index" (merge {"_index" (->es-key index)} (when id {"_id" id}))}
+           doc))
+
+;;; Private
+
+(defn- enqueue
+  [processor & operations]
+  (let [queue (:queue processor)]
+    (locking queue
+      (swap! queue #(apply conj % operations))
+      (when (and (:count processor)
+                 (>= (count @queue) (:count processor)))
+        (process-queue (:cluster processor) queue)))))
+
+(defn- process-queue
+  [cluster queue]
+  (locking queue
+    (when (not-empty @queue)
+      (cluster/run cluster
+        {:method :post
+         :uri (http/uri {:segments ["_bulk"]})
+         :headers {"Content-Type" "application/x-ndjson"}
+         :body @queue})
+      (reset! queue []))))

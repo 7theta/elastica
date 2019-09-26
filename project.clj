@@ -8,13 +8,13 @@
 ;;   the terms of this license.
 ;;   You must not remove this notice, or any others, from this software.
 
-(defproject com.7theta/elastica "7.0.0-0.1-SNAPSHOT"
+(defproject com.7theta/elastica "7.3.2-1.0"
   :description "An idiomatic clojure interface to Elasticsearch"
   :url "https://github.com/7theta/elastica"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.10.0"]
-                 [com.7theta/utilis "1.3.0"]
+                 [com.7theta/utilis "1.7.0"]
                  [metosin/jsonista "0.2.2"]
                  [http-kit "2.3.0"]
                  [clj-time "0.15.1"]
