@@ -13,15 +13,15 @@
   :url "https://github.com/7theta/elastica"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.10.0"]
-                 [com.7theta/utilis "1.7.0"]
-                 [metosin/jsonista "0.2.2"]
+  :dependencies [[org.clojure/clojure "1.10.1"]
+                 [com.7theta/utilis "1.9.0"]
+                 [metosin/jsonista "0.2.6"]
                  [http-kit "2.3.0"]
-                 [clj-time "0.15.1"]
+                 [clj-time "0.15.2"]
                  [inflections "0.13.2"]
-                 [integrant "0.7.0"]
+                 [integrant "0.8.0"]
                  [commons-validator "1.6"]
-                 [metosin/spec-tools "0.9.1"]]
+                 [metosin/spec-tools "0.10.3"]]
   :profiles {:dev {:dependencies [[integrant/repl "0.3.1"]]
                    :source-paths ["dev"]}}
   :scm {:name "git"

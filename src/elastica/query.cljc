@@ -426,3 +426,23 @@
      {:prefix prefix
       :completion {:field field
                    :fuzzy {:fuzziness fuzziness}}}}}))
+
+(defn percolate
+  "The percolate query can be used to match queries stored in an index. The
+  percolate query itself contains the document that will be used as query to
+  match with the stored queries.
+
+  https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-percolate-query.html"
+  [field & {:keys [name document documents index id routing preference version]}]
+  (compact
+   {:percolate
+    (merge {:field field
+            :name name}
+           (cond
+             document {:document document}
+             documents {:documents documents}
+             (and id index) {:id id
+                             :index index
+                             :routing routing
+                             :preference preference
+                             :version version}))}))

@@ -228,6 +228,39 @@
              :hits :hits count
              (= 2))))))
 
+;;; Percolation test
+
+(defn test-percolation
+  []
+  (with-index
+    (fn [index-name]
+
+      ;; Create an index with two fields:
+      @(ei/ensure-index!
+        (client) index-name
+        :settings {:shards 8
+                   :replicas 1})
+
+      @(ei/put-mapping!
+        (client) index-name
+        {"message" {"type" "text"}
+         "query" {"type" "percolator"}})
+
+      ;; Register a query in the percolator
+      @(e/put!
+        (client) index-name
+        {:query (eq/match :message "bonsai tree")}
+        :refresh true)
+
+      ;; Match a document to the registered percolator queries:
+      (->> (eq/percolate :query :document {:message "A new bonsai tree in the office"})
+           (e/search (client) index-name)
+           (deref)
+           (:hits)
+           (:total)
+           (:value)
+           (= 1)))))
+
 ;;; Run All
 
 ;; TODO - convert everything to defspec/test.check and move to test/check
