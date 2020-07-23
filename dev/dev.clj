@@ -12,25 +12,277 @@
   "Tools for interactive development with the REPL. This file should
   not be included in a production build of the application."
   (:require [elastica.cluster :as ec]
-            [elastica.batch :as ecb]
             [elastica.index :as ei]
             [elastica.core :as e]
             [elastica.query :as eq]
+            [elastica.batch :as ecb]
 
-            [reloaded.repl :refer [system init start stop go reset reset-all]]
-            [clojure.tools.namespace.repl :refer [refresh refresh-all]]
-            [com.stuartsierra.component :as component]
+            [elastica.impl.coercion :as cc]
+
+            [integrant.core :as ig]
+
+            [integrant.repl :refer [clear go halt init reset reset-all set-prep!]]
+            [integrant.repl.state :refer [system]]
+            [clojure.tools.namespace.repl :refer [refresh refresh-all disable-reload!]]
 
             [clojure.repl :refer [apropos dir doc find-doc pst source]]
             [clojure.reflect :refer [reflect]]
             [clojure.pprint :refer [pprint]]
 
-            [clojure.test :refer [run-tests run-all-tests]]))
+            [clojure.test :refer [run-tests run-all-tests]]
+            [clojure.string :as st]))
 
-(defn dev-system
-  [_config]
-  (component/system-map
-   :cluster (ec/transport-client "elasticsearch")
-   :batch-processor (component/using (ecb/batch-processor "Bulk Import") [:cluster])))
+(disable-reload! (find-ns 'integrant.core))
 
-(reloaded.repl/set-init! #(dev-system nil))
+(def dev-config
+  {:elastica.cluster/client {}})
+
+(ig/load-namespaces dev-config)
+
+(set-prep! (constantly dev-config))
+
+;;; Test Utilities
+
+(def prn-monitor (Object.))
+(defn prn*
+  [& args]
+  (locking prn-monitor
+    (apply prn args)))
+
+(defn client [] (:elastica.cluster/client system))
+
+(defn gen-index-name
+  []
+  (cc/es-key-> (st/lower-case (str "test_index_" (gensym)))))
+
+(defn gen-document
+  []
+  {:bar "baz"})
+
+(defn gen-id
+  []
+  (st/lower-case (str "test_doc_" (gensym))))
+
+(defn with-index
+  [f]
+  (let [index-name (gen-index-name)]
+    (try
+      (f index-name)
+      (catch Exception e
+        (throw e))
+      (finally
+        (try @(ei/delete-index! (client) index-name)
+             (catch Exception e))))))
+
+;;; Index Tests
+
+(defn test-create-index
+  []
+  (with-index
+    (fn [index-name]
+      @(ei/create-index! (client) index-name)
+      @(ei/index-exists? (client) index-name))))
+
+(defn test-delete-index
+  []
+  (with-index
+    (fn [index-name]
+      @(ei/create-index! (client) index-name)
+      (and @(ei/index-exists? (client) index-name)
+           (do @(ei/delete-index! (client) index-name)
+               (false? @(ei/index-exists? (client) index-name)))))))
+
+(defn test-get-index
+  []
+  (with-index
+    (fn [index-name]
+      @(ei/create-index! (client) index-name)
+      (let [index-map @(ei/index (client) index-name)]
+        (some? (get index-map (keyword index-name)))))))
+
+(defn test-index-exists
+  []
+  (with-index
+    (fn [index-name]
+      (and
+       (true?
+        (do @(ei/create-index! (client) index-name)
+            @(ei/index-exists? (client) index-name)))
+       (false?
+        (do @(ei/delete-index! (client) index-name)
+            @(ei/index-exists? (client) index-name)))))))
+
+(defn test-ensure-index
+  []
+  (with-index
+    (fn [index-name]
+      @(ei/ensure-index! (client) index-name)
+      @(ei/index-exists? (client) index-name))))
+
+;;; Document Tests
+
+(defn test-put-get
+  []
+  (with-index
+    (fn [index-name]
+      (let [document (gen-document)]
+        @(ei/ensure-index! (client) index-name)
+        (boolean
+         (when-let [id (e/id @(e/put! (client) index-name document))]
+           (= document (:_source @(e/get (client) index-name id)))))))))
+
+(defn test-update
+  []
+  (with-index
+    (fn [index-name]
+      (let [document (gen-document)
+            update-doc {:r (rand-int 1000)}]
+        @(ei/ensure-index! (client) index-name)
+        (boolean
+         (when-let [id (e/id @(e/put! (client) index-name document))]
+           @(e/update! (client) index-name id :update-doc update-doc)
+           (= (merge document update-doc)
+              (:_source @(e/get (client) index-name id)))))))))
+
+(defn test-upsert
+  []
+  (with-index
+    (fn [index-name]
+      (let [document (gen-document)
+            update-doc {:r (rand-int 1000)}
+            id (gen-id)]
+        @(ei/ensure-index! (client) index-name)
+        (dotimes [_ 2]
+          @(e/upsert!
+            (client) index-name id
+            :insert-doc document
+            :update-doc update-doc))
+        (= (merge document update-doc)
+           (:_source @(e/get (client) index-name id)))))))
+
+(defn test-delete
+  []
+  (with-index
+    (fn [index-name]
+      (let [document (gen-document)]
+        @(ei/ensure-index! (client) index-name)
+        (boolean
+         (when-let [id (e/id @(e/put! (client) index-name document))]
+           (try @(e/get (client) index-name id)
+                (catch Exception e
+                  (-> e ex-data :es-error :found false?)))))))))
+
+;;; Search/Query Tests
+
+(defn test-exact-match-search
+  []
+  (with-index
+    (fn [index-name]
+      (let [document (gen-document)]
+        @(ei/ensure-index! (client) index-name)
+        (when-let [id (e/id
+                       @(e/put!
+                         (client) index-name document
+                         :refresh :wait-for))]
+          (let [k (first (keys document))]
+            (->> @(e/search
+                   (client) [index-name]
+                   (eq/match (name k) (get document k)))
+                 :hits
+                 :hits
+                 first
+                 :_source
+                 (= document))))))))
+
+(defn test-metaphone-search
+  "More options: https://www.elastic.co/guide/en/elasticsearch/plugins/6.x/analysis-phonetic-token-filter.html"
+  []
+  (with-index
+    (fn [index-name]
+      (let [document1 {:name "John Smith"}
+            document2 {:name "Jonnie Smythe"}]
+        @(ei/ensure-index!
+          (client) index-name
+          :settings {:shards 8
+                     :replicas 1
+                     "analysis"
+                     {"filter"
+                      {"dbl_metaphone"
+                       {"type" "phonetic"
+                        "encoder" "double_metaphone"}}
+                      "analyzer" {"dbl_metaphone"
+                                  {"tokenizer" "standard"
+                                   "filter" "dbl_metaphone"}}}})
+        @(ei/put-mapping!
+          (client) index-name
+          {"name"
+           {"type" "text"
+            "fields" {"phonetic"
+                      {"type" "text"
+                       "analyzer" "dbl_metaphone"}}}})
+        @(e/put! (client) index-name document1 :refresh :wait-for)
+        @(e/put! (client) index-name document2 :refresh :wait-for)
+        (->> @(e/search
+               (client) [index-name]
+               (eq/match "name.phonetic" "Jahnnie Smith" :operator :and))
+             :hits :hits count
+             (= 2))))))
+
+;;; Percolation test
+
+(defn test-percolation
+  []
+  (with-index
+    (fn [index-name]
+
+      ;; Create an index with two fields:
+      @(ei/ensure-index!
+        (client) index-name
+        :settings {:shards 8
+                   :replicas 1})
+
+      @(ei/put-mapping!
+        (client) index-name
+        {"message" {"type" "text"}
+         "query" {"type" "percolator"}})
+
+      ;; Register a query in the percolator
+      @(e/put!
+        (client) index-name
+        {:query (eq/match :message "bonsai tree")}
+        :refresh true)
+
+      ;; Match a document to the registered percolator queries:
+      (->> (eq/percolate :query :document {:message "A new bonsai tree in the office"})
+           (e/search (client) index-name)
+           (deref)
+           (:hits)
+           (:total)
+           (:value)
+           (= 1)))))
+
+;;; Run All
+
+;; TODO - convert everything to defspec/test.check and move to test/check
+(defn run-dev-tests
+  []
+  (do (halt) (go))
+  (->> (ns-publics 'dev)
+       keys
+       (filter (comp (partial re-find #"^test") str))
+       (map (fn [test-fn] [(str test-fn) @(resolve test-fn)]))
+       (map (fn [[test-name test-fn]]
+              (let [result (try (test-fn)
+                                (catch Exception e
+                                  e))]
+                (println
+                 "test results:"
+                 [test-name
+                  {:result
+                   (if (instance? Throwable result)
+                     false
+                     result)}])
+                (when (instance? Throwable result)
+                  (throw result)))))
+       doall)
+  nil)
