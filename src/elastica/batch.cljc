@@ -9,6 +9,7 @@
 ;;   You must not remove this notice, or any others, from this software.
 
 (ns elastica.batch
+  (:refer-clojure :exclude [flush])
   (:require [elastica.impl.client :as ec]
             [elastica.impl.coercion :refer [->es-key]]
             [elastica.impl.http :as http]
@@ -23,7 +24,7 @@
 (declare processor shutdown enqueue process-queue)
 
 (defmethod ig/init-key :elastica.batch/processor [_ args]
-  (apply-kw processor args))
+  (apply-kw processor (:cluster args) args))
 
 (defmethod ig/halt-key! :elastica.batch/processor [_ processor]
   (shutdown processor))
@@ -50,6 +51,10 @@
   (enqueue processor
            {"index" (merge {"_index" (->es-key index)} (when id {"_id" id}))}
            doc))
+
+(defn flush
+  [processor]
+  (process-queue (:cluster processor) (:queue processor)))
 
 ;;; Private
 
