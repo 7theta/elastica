@@ -35,15 +35,15 @@
                      interval
                      enqueue-buffer-size
                      http-workers]
-              :or {enqueue-buffer-size (or (when count
-                                             (min 1024 (* 2 count)))
-                                           100)
+              :or {enqueue-buffer-size (->> count
+                                            (or 100)
+                                            (* 2)
+                                            (min 1024))
                    http-workers 8}}]
-  (let [queue (atom [])
+  (let [queue (atom {:operations [] :promises []})
         enqueue-ch (chan enqueue-buffer-size)
         http-worker-ch (chan)
         processor {:cluster cluster
-                   :promises (atom [])
                    :queue queue
                    :http-worker-ch http-worker-ch
                    :http-worker-pool (http-worker-pool http-worker-ch http-workers)
@@ -64,8 +64,8 @@
 (defn put!
   "Submit a document 'doc' to the batch processor to be indexed in 'index'. When
   this document has been indexed as part of a batch, the return promise 'p' will
-  deliver the result of having indexed the batch."
-  [processor index doc & {:keys [id] :as args}]
+  deliver the result of having indexed the batch, or an exception if one occurs."
+  [processor index doc & args]
   (let [p (promise)]
     (>!! (:enqueue-ch processor)
          {:processor processor
@@ -75,36 +75,40 @@
           :p p})
     p))
 
-(defn flush
-  [processor]
-  (process-queue processor))
+(def flush process-queue)
 
 ;;; Private
 
+(defn- append-operations
+  [operations index doc id]
+  (apply conj operations
+         [{"index" (merge
+                    {"_index" (->es-key index)}
+                    (when id {"_id" id}))}
+          doc]))
+
 (defn- enqueue
   [{:keys [processor p index doc args]}]
-  (let [{:keys [queue promises]} processor
+  (let [{:keys [queue]} processor
         {:keys [id]} args]
     (locking queue
-      (swap! promises conj p)
-      (swap! queue #(apply conj %
-                           [{"index" (merge {"_index" (->es-key index)}
-                                            (when id {"_id" id}))}
-                            doc]))
+      (swap! queue (fn [queue]
+                     (-> queue
+                         (update :promises conj p)
+                         (update :operations append-operations index doc id))))
       (when (and (:count processor)
-                 (>= (count @queue) (:count processor)))
+                 (>= (count (:operations @queue))
+                     (:count processor)))
         (process-queue processor)))))
 
 (defn- process-queue
   [{:keys [cluster queue promises http-worker-ch]}]
   (when-let [batch-job (locking queue
-                         (when (not-empty @queue)
-                           (let [operations @queue
-                                 promises* @promises]
-                             (reset! promises [])
-                             (reset! queue [])
+                         (let [{:keys [operations promises]} @queue]
+                           (when (not-empty operations)
+                             (reset! queue {:operations [] :promises []})
                              (when (seq operations)
-                               [operations promises*]))))]
+                               [operations promises]))))]
     (>!! http-worker-ch [cluster batch-job])))
 
 (defn- enqueue-worker
@@ -133,7 +137,8 @@
                    (doseq [p promises]
                      (deliver p result)))
                  (catch Exception e
-                   (println e "Exception occurred submitting batch")))
+                   (doseq [p promises]
+                     (deliver p e))))
             (recur)))
         (catch Exception e
           (println e "Exception occurred in enqueue worker."))))))
